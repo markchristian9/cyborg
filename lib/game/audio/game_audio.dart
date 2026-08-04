@@ -91,6 +91,18 @@ enum Sfx {
   gameOver,
 }
 
+/// 배경으로 흐르는 음악 트랙.
+enum MusicTrack {
+  /// 기본 전투 테마. 로봇 전장의 인더스트리얼 비트(167 BPM).
+  battle,
+
+  /// 잠행·탐색 구간에 어울리는 느린 테마(125 BPM).
+  prowl,
+
+  /// 음악 없이 로봇 공장의 저주파 험만 흐르는 앰비언스.
+  ambience,
+}
+
 /// 사운드 하나의 재생 특성.
 class _SfxSpec {
   const _SfxSpec(
@@ -128,6 +140,9 @@ class _SfxSpec {
 /// 사운드를 [AudioPool] 에 미리 올려 두고, [listener] 로부터의 거리에 따라
 /// 볼륨을 감쇠시켜 화면 밖의 전투가 시끄럽지 않도록 한다.
 ///
+/// 배경음악은 [playMusic] 으로 켜고 끈다. 효과음과 달리 한 번에 한 트랙만
+/// 흐르며, 트랙을 바꾸면 이전 트랙은 자동으로 멈춘다.
+///
 /// [init] 을 부르지 않았거나 플랫폼이 오디오를 지원하지 않으면 모든 재생
 /// 요청은 조용히 무시된다. 소리 때문에 게임이 멈추는 일은 없다.
 class GameAudio {
@@ -135,10 +150,22 @@ class GameAudio {
 
   static const String _sfxDir = 'sfx/';
   static const String _musicDir = 'music/';
-  static const String _ambienceFile = '${_musicDir}ambience_factory.mp3';
+
+  /// 게임을 시작할 때 흐르는 기본 배경음악.
+  static const MusicTrack defaultTrack = MusicTrack.battle;
 
   /// 이 거리(타일)를 넘어선 곳의 소리는 들리지 않는다.
   static const double hearingRange = 20;
+
+  /// 트랙별 파일과 상대 볼륨.
+  ///
+  /// 트랙마다 체감 음량이 달라 [musicVolume] 만으로는 균형이 맞지 않으므로
+  /// 여기서 한 번 더 보정한다.
+  static const Map<MusicTrack, ({String file, double gain})> _tracks = {
+    MusicTrack.battle: (file: 'bgm_battle.mp3', gain: 1.0),
+    MusicTrack.prowl: (file: 'bgm_prowl.mp3', gain: 1.0),
+    MusicTrack.ambience: (file: 'ambience_factory.mp3', gain: 0.85),
+  };
 
   static const Map<Sfx, _SfxSpec> _specs = {
     // ── 근접 전투 ────────────────────────────────────────────────
@@ -300,7 +327,7 @@ class GameAudio {
   static final Map<Sfx, int> _lastPlayedMs = {};
 
   static bool _ready = false;
-  static bool _ambienceOn = false;
+  static MusicTrack? _currentTrack;
 
   /// 효과음 전체 볼륨(0~1).
   static double sfxVolume = 0.85;
@@ -311,8 +338,11 @@ class GameAudio {
   /// 오디오 시스템이 사용할 준비가 되었는지 여부.
   static bool get isReady => _ready;
 
-  /// 배경 앰비언스가 재생 중인지 여부.
-  static bool get isAmbiencePlaying => _ambienceOn;
+  /// 지금 흐르고 있는 배경음악. 아무것도 재생 중이 아니면 null.
+  static MusicTrack? get currentTrack => _currentTrack;
+
+  /// 배경음악이 재생 중인지 여부.
+  static bool get isMusicPlaying => _currentTrack != null;
 
   /// 거리 감쇠의 기준이 되는 청취 위치(보통 플레이어의 그리드 좌표).
   ///
@@ -328,7 +358,7 @@ class GameAudio {
     if (_muted == value) return;
     _muted = value;
     // 재생 중인 트랙이 없을 때 bgm 을 건드리면 플랫폼에 따라 예외가 난다.
-    if (!_ambienceOn) return;
+    if (_currentTrack == null) return;
     unawaited(_guard(value ? FlameAudio.bgm.pause() : FlameAudio.bgm.resume()));
   }
 
@@ -355,8 +385,11 @@ class GameAudio {
         }
       }
 
-      // 앰비언스도 함께 올려 두어야 첫 재생이 끊기지 않는다.
-      await FlameAudio.audioCache.loadAll([...needed.keys, _ambienceFile]);
+      // 배경음악도 함께 올려 두어야 트랙을 바꿀 때 끊기지 않는다.
+      await FlameAudio.audioCache.loadAll([
+        ...needed.keys,
+        for (final track in _tracks.values) '$_musicDir${track.file}',
+      ]);
       await Future.wait(
         needed.entries.map((entry) async {
           _pools[entry.key] = await FlameAudio.createPool(
@@ -411,43 +444,57 @@ class GameAudio {
     unawaited(_guard(pool.start(volume: volume)));
   }
 
-  /// 배경 앰비언스(로봇 공장의 저주파 험)를 반복 재생한다.
-  static Future<void> startAmbience() async {
-    if (!_ready || _ambienceOn) return;
-    _ambienceOn = true;
+  /// 배경음악을 무한 반복으로 재생한다.
+  ///
+  /// 트랙을 넘기지 않으면 [defaultTrack] 이 흐른다. 이미 같은 트랙이 흐르고
+  /// 있으면 아무 일도 하지 않으므로 매 상태 전환마다 안심하고 불러도 된다.
+  static Future<void> playMusic([MusicTrack track = defaultTrack]) async {
+    if (!_ready || _currentTrack == track) return;
+    _currentTrack = track;
     if (_muted) return;
     try {
-      await FlameAudio.bgm.play(_ambienceFile, volume: musicVolume);
+      await FlameAudio.bgm.play(
+        '$_musicDir${_tracks[track]!.file}',
+        volume: _trackVolume(track),
+      );
     } catch (error) {
-      _ambienceOn = false;
-      debugPrint('앰비언스 재생 실패: $error');
+      _currentTrack = null;
+      debugPrint('배경음악 재생 실패($track): $error');
     }
   }
 
-  /// 배경 앰비언스를 멈춘다.
-  static Future<void> stopAmbience() async {
-    if (!_ambienceOn) return;
-    _ambienceOn = false;
+  /// 배경음악을 멈춘다.
+  static Future<void> stopMusic() async {
+    if (_currentTrack == null) return;
+    _currentTrack = null;
     await _guard(FlameAudio.bgm.stop());
   }
 
   /// 배경음 볼륨을 바꾸고 재생 중인 트랙에도 즉시 반영한다.
   static Future<void> setMusicVolume(double value) async {
     musicVolume = value.clamp(0.0, 1.0);
-    if (_ambienceOn && !_muted) {
-      await FlameAudio.bgm.audioPlayer.setVolume(musicVolume);
+    final track = _currentTrack;
+    if (track != null && !_muted) {
+      await _guard(
+        FlameAudio.bgm.audioPlayer.setVolume(_trackVolume(track)),
+      );
     }
   }
 
   /// 앱이 백그라운드로 갈 때처럼 전체 오디오를 잠시 멈춘다.
   static Future<void> pauseAll() async {
-    if (_ambienceOn) await _guard(FlameAudio.bgm.pause());
+    if (_currentTrack != null) await _guard(FlameAudio.bgm.pause());
   }
 
   /// [pauseAll] 로 멈춘 오디오를 다시 재생한다.
   static Future<void> resumeAll() async {
-    if (_ambienceOn && !_muted) await _guard(FlameAudio.bgm.resume());
+    if (_currentTrack != null && !_muted) {
+      await _guard(FlameAudio.bgm.resume());
+    }
   }
+
+  static double _trackVolume(MusicTrack track) =>
+      (musicVolume * _tracks[track]!.gain).clamp(0.0, 1.0);
 
   /// [listener] 로부터의 거리에 따른 볼륨 배율(0~1)을 구한다.
   static double _falloffAt(Vector2? at) {

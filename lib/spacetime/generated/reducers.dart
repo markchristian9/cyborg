@@ -11,6 +11,28 @@ class Reducers {
 
   final ReducerEmitter _reducerEmitter;
 
+  /// Calls the `attack_monster` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> attackMonster({
+    required Int64 monsterId,
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    encoder.writeU64(monsterId);
+    return await _reducerCaller.call(
+      attackMonsterDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
   /// Calls the `change_password` reducer.
   ///
   /// Returns a [TransactionResult] on success. Throws
@@ -81,6 +103,66 @@ class Reducers {
     );
   }
 
+  /// Calls the `ensure_world_populated` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> ensureWorldPopulated({
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    return await _reducerCaller.call(
+      ensureWorldPopulatedDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
+  /// Calls the `enter_world` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> enterWorld({
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    return await _reducerCaller.call(
+      enterWorldDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
+  /// Calls the `leave_world` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> leaveWorld({
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    return await _reducerCaller.call(
+      leaveWorldDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
   /// Calls the `login` reducer.
   ///
   /// Returns a [TransactionResult] on success. Throws
@@ -125,6 +207,30 @@ class Reducers {
     );
   }
 
+  /// Calls the `move_to` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> moveTo({
+    required double gridX,
+    required double gridY,
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    encoder.writeF32(gridX);
+    encoder.writeF32(gridY);
+    return await _reducerCaller.call(
+      moveToDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
   /// Calls the `register_account` reducer.
   ///
   /// Returns a [TransactionResult] on success. Throws
@@ -157,14 +263,12 @@ class Reducers {
   /// `Pending` (queued to offline storage), or `Dropped` (skipped via
   /// `dropIfOffline: true` while offline).
   Future<TransactionResult> reportProgress({
-    required int level,
-    required Int64 xp,
+    required int totalXp,
     List<OptimisticChange>? optimisticChanges,
     bool dropIfOffline = false,
   }) async {
     final encoder = BsatnEncoder();
-    encoder.writeU32(level);
-    encoder.writeU64(xp);
+    encoder.writeU32(totalXp);
     return await _reducerCaller.call(
       reportProgressDef.name,
       encoder.toBytes(),
@@ -193,6 +297,44 @@ class Reducers {
       optimisticChanges: optimisticChanges,
       dropIfOffline: dropIfOffline,
     );
+  }
+
+  /// Calls the `teleport_to` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> teleportTo({
+    required String destination,
+    required double gridX,
+    required double gridY,
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    encoder.writeString(destination);
+    encoder.writeF32(gridX);
+    encoder.writeF32(gridY);
+    return await _reducerCaller.call(
+      teleportToDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
+  StreamSubscription<void> onAttackMonster(
+    void Function(EventContext ctx, Int64 monsterId) callback,
+  ) {
+    return _reducerEmitter.on(attackMonsterDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! AttackMonsterArgs) return;
+      callback(ctx, args.monsterId);
+    });
   }
 
   StreamSubscription<void> onChangePassword(
@@ -232,6 +374,44 @@ class Reducers {
     });
   }
 
+  StreamSubscription<void> onEnsureWorldPopulated(
+    void Function(EventContext ctx) callback,
+  ) {
+    return _reducerEmitter.on(ensureWorldPopulatedDef).listen((
+      EventContext ctx,
+    ) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! EnsureWorldPopulatedArgs) return;
+      callback(ctx);
+    });
+  }
+
+  StreamSubscription<void> onEnterWorld(
+    void Function(EventContext ctx) callback,
+  ) {
+    return _reducerEmitter.on(enterWorldDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! EnterWorldArgs) return;
+      callback(ctx);
+    });
+  }
+
+  StreamSubscription<void> onLeaveWorld(
+    void Function(EventContext ctx) callback,
+  ) {
+    return _reducerEmitter.on(leaveWorldDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! LeaveWorldArgs) return;
+      callback(ctx);
+    });
+  }
+
   StreamSubscription<void> onLogin(
     void Function(EventContext ctx, String email, String password) callback,
   ) {
@@ -254,6 +434,18 @@ class Reducers {
     });
   }
 
+  StreamSubscription<void> onMoveTo(
+    void Function(EventContext ctx, double gridX, double gridY) callback,
+  ) {
+    return _reducerEmitter.on(moveToDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! MoveToArgs) return;
+      callback(ctx, args.gridX, args.gridY);
+    });
+  }
+
   StreamSubscription<void> onRegisterAccount(
     void Function(EventContext ctx, String email, String password) callback,
   ) {
@@ -267,14 +459,14 @@ class Reducers {
   }
 
   StreamSubscription<void> onReportProgress(
-    void Function(EventContext ctx, int level, Int64 xp) callback,
+    void Function(EventContext ctx, int totalXp) callback,
   ) {
     return _reducerEmitter.on(reportProgressDef).listen((EventContext ctx) {
       final event = ctx.event;
       if (event is! ReducerEvent) return;
       final args = event.reducerArgs;
       if (args is! ReportProgressArgs) return;
-      callback(ctx, args.level, args.xp);
+      callback(ctx, args.totalXp);
     });
   }
 
@@ -287,6 +479,24 @@ class Reducers {
       final args = event.reducerArgs;
       if (args is! SelectCharacterArgs) return;
       callback(ctx, args.characterId);
+    });
+  }
+
+  StreamSubscription<void> onTeleportTo(
+    void Function(
+      EventContext ctx,
+      String destination,
+      double gridX,
+      double gridY,
+    )
+    callback,
+  ) {
+    return _reducerEmitter.on(teleportToDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! TeleportToArgs) return;
+      callback(ctx, args.destination, args.gridX, args.gridY);
     });
   }
 }

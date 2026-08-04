@@ -20,11 +20,25 @@ const double kHeightUnit = 56.0;
 /// 이 값이 1.0이라는 것은 "타일 = 미터"임을 뜻한다.
 const double kMetersPerTile = 1.0;
 
-/// 게임 월드 한 변의 길이(미터). 가로 1 km × 세로 1 km.
+/// 플레이어가 **실제로 걸을 수 있는** 월드 한 변의 길이(미터).
+///
+/// 가로 1 km × 세로 1 km. 이 값은 격자의 크기가 아니라 통행 가능한 바닥의
+/// 크기다 — 월드 가장자리를 두르는 허공 테두리는 여기에 포함되지 않는다.
+/// 규격을 바꾸려면 이 값 하나만 고치면 나머지가 따라온다.
 const double kWorldSizeMeters = 1000.0;
 
-/// 월드 한 변의 타일 수. [kWorldSizeMeters] / [kMetersPerTile].
-const int kWorldTiles = 1000;
+/// 통행 가능 영역 한 변의 타일 수. [kWorldSizeMeters] / [kMetersPerTile].
+const int kWorldPlayableTiles = kWorldSizeMeters ~/ kMetersPerTile;
+
+/// 월드 가장자리를 두르는 통행 불가 테두리의 두께(타일).
+///
+/// 아이소메트릭에서 바닥이 그냥 잘리면 어색하므로 허공으로 감싼다.
+/// 이 테두리는 걸을 수 있는 1 km **바깥에** 덧붙으므로, 걸을 수 있는
+/// 거리를 깎지 않는다.
+const int kWorldEdgeMarginTiles = 3;
+
+/// 월드 격자 한 변의 타일 수. 통행 가능 영역 + 양쪽 테두리.
+const int kWorldTiles = kWorldPlayableTiles + kWorldEdgeMarginTiles * 2;
 
 /// 지면 렌더링과 구조물 스트리밍의 단위가 되는 청크 한 변의 타일 수.
 ///
@@ -96,6 +110,31 @@ bool facesRight(Vector2 dir) => (dir.x - dir.y) >= 0;
 
 /// 그리드 방향 벡터가 화면상 아래쪽(카메라 쪽)을 향하는지 여부.
 bool facesDown(Vector2 dir) => (dir.x + dir.y) >= 0;
+
+/// 그리드 방향 벡터를 캐릭터의 **시선각**(라디안)으로 바꾼다.
+///
+/// `0`이면 카메라 쪽(화면 아래)을 정면으로 마주 보고, `π/2`면 화면 오른쪽,
+/// `π`면 등을 보인다. 값이 연속이라 방향을 몇 개로 쪼갤 필요가 없다 —
+/// 스프라이트가 아니라 그때그때 그리는 캐릭터이므로 각도를 그대로 쓴다.
+///
+/// 2:1 다이메트릭 투영은 세로를 절반으로 누르므로, 실제 회전각을 얻으려면
+/// 화면 y 성분을 두 배로 되돌려야 한다.
+double facingYaw(Vector2 dir) {
+  final screen = gridDirToScreenDir(dir);
+  if (screen.length2 < 1e-9) return 0;
+  return math.atan2(screen.x, screen.y * 2);
+}
+
+/// [facingYaw]를 [steps]개의 방향으로 양자화한다.
+///
+/// 연속 각도를 그대로 써도 되지만, 렌더 결과를 캐시하려면 값을 이산화해야
+/// 캐시가 적중한다. 256이면 1.4°마다 한 칸이라 사람 눈에는 연속으로 보인다.
+double quantizeYaw(double yaw, int steps) {
+  if (steps <= 0) return yaw;
+  const twoPi = math.pi * 2;
+  final step = twoPi / steps;
+  return (yaw / step).roundToDouble() * step;
+}
 
 /// 8방향 인덱스(0 = 화면 오른쪽, 시계 방향)를 구한다.
 int facingOctant(Vector2 dir) {

@@ -274,12 +274,23 @@ mod tests {
 
     #[test]
     fn 이메일은_소문자로_정규화된다() {
-        assert_eq!(normalize_email("  User@Example.COM "), Ok("user@example.com".into()));
+        assert_eq!(
+            normalize_email("  User@Example.COM "),
+            Ok("user@example.com".into())
+        );
     }
 
     #[test]
     fn 형식이_아닌_이메일은_거절한다() {
-        for bad in ["", "user", "user@", "@example.com", "a@b", "a b@c.com", "a@@b.com"] {
+        for bad in [
+            "",
+            "user",
+            "user@",
+            "@example.com",
+            "a@b",
+            "a b@c.com",
+            "a@@b.com",
+        ] {
             assert!(normalize_email(bad).is_err(), "통과하면 안 된다: {bad:?}");
         }
     }
@@ -287,7 +298,10 @@ mod tests {
     #[test]
     fn 같은_salt_와_비밀번호는_같은_해시를_준다() {
         let salt = "0123456789abcdef0123456789abcdef";
-        assert_eq!(hash_password("hunter2!", salt), hash_password("hunter2!", salt));
+        assert_eq!(
+            hash_password("hunter2!", salt),
+            hash_password("hunter2!", salt)
+        );
     }
 
     #[test]

@@ -123,6 +123,9 @@ class GamePalette {
   static const Color hpFill = Color(0xFF16C98D);
   static const Color hpFillLow = Color(0xFFFF2E77);
   static const Color energyFill = Color(0xFF2E86FF);
+
+  /// 마력 게이지. 스킬 자원이라 스태미나(EN)와 뚜렷이 구분되는 청록을 쓴다.
+  static const Color mpFill = Color(0xFF00D8E8);
   static const Color xpFill = Color(0xFF8A5CFF);
   static const Color textPrimary = Color(0xFF0C2A3D);
   static const Color textDim = Color(0xFF5C86A0);

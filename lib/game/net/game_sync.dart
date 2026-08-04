@@ -24,7 +24,19 @@ abstract class GameSync {
   void reportKill(String enemyKind, int score) {}
 
   /// 레벨업했을 때.
-  void reportLevel(int level) {}
+  ///
+  /// [totalXp] 는 지금까지 얻은 경험치의 총합이다. 레벨을 함께 넘기는 것은
+  /// 로그·연출용이며, 서버는 누적에서 레벨을 다시 계산한다.
+  void reportLevel(int level, int totalXp) {}
+
+  /// 아직 보내지 못한 진행 상황을 지금 올리고 끝날 때까지 기다린다.
+  ///
+  /// 로그아웃처럼 **이 뒤로 더는 [tick] 이 오지 않는** 길목에서 부른다. 평소에는
+  /// 주기 전송이 알아서 따라잡지만, 화면이 사라진 뒤에는 따라잡을 기회가 없다.
+  ///
+  /// 프로세스가 강제로 죽는 경우까지 보장하지는 못한다. 그건 보내지 못한 값을
+  /// 기기에 남겨 두는 구조가 있어야 가능하고, 지금은 없다.
+  Future<void> flushProgress() async {}
 
   /// 몸체가 파괴되어 안전지대에서 재가동했을 때.
   ///

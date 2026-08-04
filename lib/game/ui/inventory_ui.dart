@@ -491,7 +491,11 @@ class InventoryPanel extends PositionComponent
         gains.add('SPD +${((spec.speedMultiplier - 1) * 100).round()}%');
       }
       if (spec.damageTakenMultiplier != 1.0) {
-        gains.add('DEF +${((1 - spec.damageTakenMultiplier) * 100).round()}%');
+        // 수치 스탯인 방어력(DEF)과 헷갈리지 않도록 다른 이름을 쓴다.
+        // 이쪽은 "받는 피해를 몇 % 깎는다"는 별개의 축이다.
+        gains.add(
+          '피해감소 ${((1 - spec.damageTakenMultiplier) * 100).round()}%',
+        );
       }
       if (spec.energyRegenMultiplier != 1.0) {
         gains.add('EN REGEN x${spec.energyRegenMultiplier.toStringAsFixed(1)}');

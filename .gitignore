@@ -46,3 +46,9 @@ app.*.map.json
 
 # SpacetimeDB 서버 모듈 빌드 산출물
 /spacetimedb/target/
+
+# 로컬 전용 — 서버 식별자·접속 정보
+env/
+
+# 로컬 도구 링크(개발자마다 경로가 다르다)
+.claude/

@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import '../palette.dart';
 
 /// 서브메뉴 한 줄에 그릴 아이콘.
-enum WorldMenuIcon { character, logout }
+enum WorldMenuIcon { character, leaderboard, teleport, logout }
 
 /// 월드 메뉴에서 펼쳐지는 서브메뉴 항목 하나.
 class WorldMenuEntry {
@@ -370,6 +370,48 @@ class WorldMenu extends PositionComponent with TapCallbacks {
           math.pi,
           math.pi,
           false,
+          stroke,
+        );
+      case WorldMenuIcon.leaderboard:
+        // 순위를 나타내는 세 개의 시상대. 가운데가 1위로 가장 높다.
+        final fill = Paint()..color = color.withValues(alpha: 0.22);
+        const podium = [
+          // (좌측 x, 높이) — 2위 · 1위 · 3위 순으로 그린다.
+          (-8.0, 8.0),
+          (-2.5, 13.0),
+          (3.0, 5.0),
+        ];
+        for (final (left, height) in podium) {
+          final bar = Rect.fromLTWH(
+            center.dx + left,
+            center.dy + 8 - height,
+            5.0,
+            height,
+          );
+          canvas.drawRect(bar, fill);
+          canvas.drawRect(bar, stroke);
+        }
+      case WorldMenuIcon.teleport:
+        // 아이소메트릭 지면에 열린 마름모 포털과 그리로 빨려 드는 화살표.
+        canvas.drawPath(
+          Path()
+            ..moveTo(center.dx, center.dy + 1)
+            ..lineTo(center.dx + 9, center.dy + 5.5)
+            ..lineTo(center.dx, center.dy + 10)
+            ..lineTo(center.dx - 9, center.dy + 5.5)
+            ..close(),
+          stroke,
+        );
+        canvas.drawLine(
+          center + const Offset(0, -9),
+          center + const Offset(0, 2),
+          stroke,
+        );
+        canvas.drawPath(
+          Path()
+            ..moveTo(center.dx - 4, center.dy - 2)
+            ..lineTo(center.dx, center.dy + 2.5)
+            ..lineTo(center.dx + 4, center.dy - 2),
           stroke,
         );
       case WorldMenuIcon.logout:

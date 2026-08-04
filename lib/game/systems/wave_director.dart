@@ -2,8 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flame/components.dart';
 
-import '../entities/enemy.dart';
 import '../level/level_map.dart';
+import 'monster_codex.dart';
 
 /// 한 웨이브의 구성 정보.
 class WavePlan {
@@ -11,16 +11,14 @@ class WavePlan {
     required this.index,
     required this.units,
     required this.hpMultiplier,
-    required this.damageMultiplier,
     required this.isBossWave,
   });
 
   final int index;
 
   /// 이번 웨이브에서 등장할 유닛 목록.
-  final List<EnemyKind> units;
+  final List<MonsterSpecies> units;
   final double hpMultiplier;
-  final double damageMultiplier;
   final bool isBossWave;
 
   int get totalCount => units.length;
@@ -38,35 +36,42 @@ class WaveDirector {
 
   int currentWave = 0;
 
+  /// [wave]번째 웨이브가 투입하는 추적대의 레벨대.
+  ///
+  /// 플레이어가 웨이브당 한두 레벨씩 오르는 것에 맞춰 완만하게 따라붙는다.
+  /// 더 가파르게 잡으면 초반 몇 웨이브 만에 손댈 수 없는 기종이 내려온다.
+  static int levelForWave(int wave) =>
+      (1 + (wave - 1) * 1.5).round().clamp(1, MonsterCodex.maxLevel);
+
+  /// 편성 예산에서 유닛 하나가 차지하는 몫.
+  static int _cost(MonsterSpecies species) => switch (species.build) {
+        MonsterBuild.drone => 1,
+        MonsterBuild.walker => 2,
+        MonsterBuild.siege => 4,
+        MonsterBuild.sovereign => 8,
+      };
+
   /// [wave]번째(1부터) 웨이브 구성을 만든다.
   WavePlan planFor(int wave) {
     final isBossWave = wave % 5 == 0;
-    final units = <EnemyKind>[];
+    final level = levelForWave(wave);
+    final units = <MonsterSpecies>[];
 
     // 웨이브가 진행될수록 총량과 상위 유닛 비중이 늘어난다.
     final budget = 3 + wave * 2;
     var spent = 0;
 
     if (isBossWave) {
-      units.add(EnemyKind.commander);
-      spent += 8;
+      final sovereign = MonsterCodex.sovereignNear(level);
+      units.add(sovereign);
+      spent += _cost(sovereign);
     }
 
     while (spent < budget) {
-      final roll = _random.nextDouble();
-      final heavyChance = (wave - 2) * 0.05;
-      final sentryChance = 0.25 + wave * 0.04;
-
-      if (wave >= 3 && roll < heavyChance.clamp(0.0, 0.32)) {
-        units.add(EnemyKind.heavy);
-        spent += 4;
-      } else if (roll < sentryChance.clamp(0.0, 0.6) + 0.2) {
-        units.add(EnemyKind.sentry);
-        spent += 2;
-      } else {
-        units.add(EnemyKind.scout);
-        spent += 1;
-      }
+      // 종 자체가 레벨을 품고 있으므로 난이도는 레벨대가 결정한다.
+      final species = MonsterCodex.roll(_random, level, spread: 5);
+      units.add(species);
+      spent += _cost(species);
     }
 
     units.shuffle(_random);
@@ -74,8 +79,8 @@ class WaveDirector {
     return WavePlan(
       index: wave,
       units: units,
-      hpMultiplier: 1 + (wave - 1) * 0.16,
-      damageMultiplier: 1 + (wave - 1) * 0.1,
+      // 개체 편차용 미세 배율. 웨이브 난이도는 레벨대가 담당한다.
+      hpMultiplier: 1 + (wave - 1) * 0.01,
       isBossWave: isBossWave,
     );
   }
@@ -110,14 +115,31 @@ class WaveDirector {
       if (!map.isWalkableAt(x + 0.5, y + 0.5)) continue;
       return Vector2(x, y);
     }
-    // 최후 수단: 맵 전체에서 아무 통행 가능 지점.
-    for (var attempt = 0; attempt < 400; attempt++) {
-      final x = _random.nextDouble() * map.width;
-      final y = _random.nextDouble() * map.height;
-      if (zone.overlapsBody(x, y, _safeZoneClearance)) continue;
-      if (map.isWalkableAt(x, y)) return Vector2(x, y);
+    // 최후 수단: 기준점 둘레로 반경을 넓혀 가며 찾는다.
+    //
+    // 월드 전역을 무작위로 뽑으면 안 된다. 1 km 월드에서는 적이 최대 1.4 km
+    // 떨어진 곳에 생기고, 그 거리는 몹 활성 반경 밖이라 영영 잠든 채로 남는다.
+    // 웨이브 종료는 살아 있는 적이 없어야 성립하므로 웨이브가 끝나지 않는다.
+    for (var ring = 2; ring <= 10; ring++) {
+      final reach = maxDistance * ring;
+      for (var attempt = 0; attempt < 40; attempt++) {
+        final angle = _random.nextDouble() * math.pi * 2;
+        final distance = _random.nextDouble() * reach;
+        final x = origin.x + math.cos(angle) * distance;
+        final y = origin.y + math.sin(angle) * distance;
+        if (zone.overlapsBody(x, y, _safeZoneClearance)) continue;
+        if (map.isWalkableAt(x, y)) return Vector2(x, y);
+      }
     }
-    return map.nearestWalkable(_pointOutsideSafeZone());
+
+    // 그래도 못 찾으면 기준점에서 가장 가까운 통행 가능한 칸으로 떨어뜨린다.
+    final fallback = map.nearestWalkable(origin);
+    if (!zone.overlapsBody(fallback.x, fallback.y, _safeZoneClearance)) {
+      return fallback;
+    }
+    return map.nearestWalkable(
+      zone.pushOutside(fallback, margin: _safeZoneClearance + 0.5),
+    );
   }
 
   /// 안전지대 경계 바로 바깥의 한 지점을 무작위 방향으로 고른다.

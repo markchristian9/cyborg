@@ -1,0 +1,15 @@
+# 테스트 태그 설정.
+#
+# `integration` 태그가 붙은 테스트는 실제 SpacetimeDB(maincloud)에 접속한다.
+# 네트워크가 없거나 서버가 내려가 있으면 실패한다.
+#
+#   flutter test                                # 전부 (네트워크 필요)
+#   flutter test --exclude-tags integration     # 네트워크 없이 도는 것만
+#   flutter test --tags integration             # 서버 연동만
+#
+# 파일에 `exclude_tags: integration` 을 적지 않는 이유는, 그렇게 하면 명령줄의
+# `--tags integration` 까지 함께 걸러져 통합 테스트를 실행할 방법이 없어지기
+# 때문이다(설정 파일의 제외가 명령줄 포함보다 우선한다).
+tags:
+  integration:
+    description: 실제 SpacetimeDB 서버에 접속한다. 네트워크가 필요하다.

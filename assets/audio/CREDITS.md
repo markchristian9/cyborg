@@ -1,7 +1,8 @@
 # 사운드 에셋 출처 및 라이선스
 
-이 게임의 모든 사운드는 **Kenney** ([kenney.nl](https://kenney.nl))가 제작해
-**CC0 1.0 Universal(퍼블릭 도메인 헌정)** 로 공개한 무료 에셋이다.
+이 게임의 모든 사운드는 **CC0 1.0 Universal(퍼블릭 도메인 헌정)** 로 공개된
+무료 에셋이다. 효과음은 **Kenney** ([kenney.nl](https://kenney.nl)), 배경음악은
+**OpenGameArt** 의 CC0 트랙을 쓴다.
 
 > CC0 는 저작권자가 권리를 완전히 포기한 것으로, 상업적 이용을 포함해 어떤
 > 용도로든 자유롭게 사용·수정·재배포할 수 있으며 저작자 표시 의무도 없다.
@@ -10,7 +11,7 @@
 
 전문: <https://creativecommons.org/publicdomain/zero/1.0/>
 
-## 사용한 팩
+## 효과음 — Kenney (CC0)
 
 | 팩 | 원본 | 내려받은 곳 |
 | --- | --- | --- |
@@ -19,12 +20,34 @@
 | Interface Sounds | <https://kenney.nl/assets/interface-sounds> | [Calinou/kenney-interface-sounds](https://github.com/Calinou/kenney-interface-sounds) |
 | Music Jingles | <https://kenney.nl/assets/music-jingles> | [Boyquotes/kenney-music-jingles-for-godot](https://github.com/Boyquotes/kenney-music-jingles-for-godot) |
 
+## 배경음악 — OpenGameArt (CC0)
+
+CC0 라 표시 의무는 없지만 만든 사람을 밝혀 둔다.
+
+| 게임 에셋 | 곡 / 작곡자 | 출처 |
+| --- | --- | --- |
+| `bgm_battle.mp3` **(기본)** | *Friendly Talk On a Robotic Battlefield (Looped)* — **illin** | <https://opengameart.org/content/friendly-talk-on-a-robotic-battlefield-looped> |
+| `bgm_prowl.mp3` | *Night Prowler* — **section31** | <https://opengameart.org/content/night-prowler> |
+
+기본 트랙으로 `bgm_battle` 을 고른 이유는 세 가지다. 제목 그대로 로봇 전장을
+그린 곡이라 "AI 로봇에 맞서는 인간 사이보그" 라는 설정과 맞고, 167 BPM 의
+인더스트리얼 비트가 아이소메트릭 전투의 속도에 붙으며, 애초에 무한 반복용으로
+만들어져 이음새가 티나지 않는다. `bgm_prowl` 은 125 BPM 으로 더 느려서 탐색·
+잠행 구간에 쓸 수 있게 함께 넣어 두었다.
+
+후보를 고를 때 각 트랙의 길이·BPM·음의 밀도·루프 이음새(앞뒤 페이드 유무)를
+분석해 비교했다. 탈락한 CC0 후보로는 *Bleeding Out*(앞뒤 페이드가 있어 루프
+이음새가 티남), *Magic Space*(우주 탐사 분위기), *Cyberpunk Moonlight
+Sonata*(107 BPM 으로 전투에 느림) 가 있었다.
+
 ## 변환
 
 - **효과음**(`sfx/`): 원본 `.ogg`/`.wav` → **모노 44.1kHz 16-bit WAV**.
   iOS·macOS 의 네이티브 플레이어가 ogg 를 재생하지 못하므로 모든 플랫폼에서
   동작하는 WAV 로 통일했다. 게임 효과음은 모노가 표준이고 용량도 절반이다.
 - **징글**(`music/levelup.wav`, `music/game_over.wav`): 스테레오 유지, WAV.
+- **배경음악**(`music/bgm_*.mp3`): 체감 음량을 방송 표준인 **-16 LUFS** 로
+  맞춰(`loudnorm`) 트랙을 바꿔도 볼륨이 튀지 않게 했다. 160kbps MP3.
 - **앰비언스**(`music/ambience_factory.mp3`): `space_engine_low_000` 을 베이스로
   `engine_circular_002` 를 낮게 겹치고, 페이드 구간을 잘라낸 뒤 크로스페이드로
   이어 붙여 25초 무한 루프로 만들었다. 길이 때문에 MP3 로 인코딩했다.
@@ -94,6 +117,8 @@
 | `game_over` | `Steel jingles/jingles_steel_1` (하강 멜로디) | Music Jingles |
 | `ambience_factory` | `space_engine_low_000` + `engine_circular_002` | Sci-Fi |
 
+배경음악 두 트랙은 위 **배경음악** 절을 참고.
+
 ## 에셋을 추가하거나 바꿀 때
 
 1. 파일을 `assets/audio/sfx/` (또는 `music/`) 에 위 규칙대로 변환해 넣는다.
@@ -108,3 +133,24 @@
    ```
 4. 새 팩을 쓴다면 이 문서에 출처와 라이선스를 반드시 남긴다. CC0 나 그에 준하는
    라이선스가 아니면 상업적 배포에서 문제가 될 수 있다.
+
+## 배경음악을 바꾸려면
+
+기본 트랙은 `GameAudio.defaultTrack` 한 줄로 정해진다.
+
+```dart
+static const MusicTrack defaultTrack = MusicTrack.battle;  // → prowl 등으로 변경
+```
+
+새 곡을 넣을 때는 위 규칙대로 변환해 `music/` 에 두고, `MusicTrack` enum 과
+`_tracks` 표에 항목을 추가한다. 곡마다 체감 음량이 달라 `gain` 으로 한 번 더
+보정할 수 있다.
+
+```
+ffmpeg -i 원본.ogg -af loudnorm=I=-16:TP=-1.5:LRA=11 \
+  -ar 44100 -c:a libmp3lame -b:a 160k assets/audio/music/bgm_이름.mp3
+```
+
+상황에 따라 곡을 바꾸려면 `GameAudio.playMusic(MusicTrack.prowl)` 처럼 부르면
+된다. 같은 트랙을 다시 요청하면 아무 일도 하지 않으므로 상태 전환마다 안심하고
+호출해도 된다.

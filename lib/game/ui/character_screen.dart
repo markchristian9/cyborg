@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 
 import '../action_rpg_game.dart';
 import '../palette.dart';
-import '../systems/level_system.dart';
 
 /// 사이보그의 현재 상태를 한눈에 보는 캐릭터 화면.
 ///
@@ -19,7 +18,7 @@ class CharacterScreen extends PositionComponent
 
   /// 기준 해상도에서의 패널 크기. 화면이 좁으면 통째로 축소한다.
   static const double panelWidth = 440;
-  static const double panelHeight = 420;
+  static const double panelHeight = 446;
 
   bool _open = false;
   double _anim = 0;
@@ -103,9 +102,15 @@ class CharacterScreen extends PositionComponent
   // ── 좌표 변환 ───────────────────────────────────────────────────────
 
   /// 화면에 맞춘 패널 축소 비율. 작은 화면에서는 통째로 줄여 넣는다.
-  double get _scale => math.min(
-        1.0,
-        math.min((size.x - 32) / panelWidth, (size.y - 32) / panelHeight),
+  ///
+  /// 화면이 여백보다도 좁은 극단적인 경우에 배율이 0이나 음수가 되지 않도록
+  /// 하한을 둔다.
+  double get _scale => math.max(
+        0.2,
+        math.min(
+          1.0,
+          math.min((size.x - 32) / panelWidth, (size.y - 32) / panelHeight),
+        ),
       );
 
   Offset get _origin => Offset(
@@ -258,10 +263,9 @@ class CharacterScreen extends PositionComponent
       anchor: Anchor.center,
     );
 
-    final atMax = player.level >= LevelSystem.maxLevel;
     _label.render(
       canvas,
-      atMax ? 'MAX' : 'LEVEL',
+      'LEVEL',
       Vector2(badgeCenter.dx, badgeCenter.dy + 17),
       anchor: Anchor.center,
     );
@@ -271,16 +275,38 @@ class CharacterScreen extends PositionComponent
     _label.render(canvas, 'EXPERIENCE', Vector2(112, 118));
     _label.render(
       canvas,
-      atMax ? 'MAX LEVEL' : '${player.xp} / ${player.xpToNextLevel}',
+      '${_grouped(player.xp)} / ${_grouped(player.xpToNextLevel)}',
       Vector2(panelWidth - 24, 118),
       anchor: Anchor.topRight,
     );
     _renderBar(
       canvas,
       const Rect.fromLTWH(112, 134, panelWidth - 112 - 24, 10),
-      atMax ? 1 : player.xp / player.xpToNextLevel,
+      player.xp / player.xpToNextLevel,
       GamePalette.xpFill,
     );
+
+    // 누적 경험치. 리더보드 순위를 정하는 값이므로 진행도와 함께 보여 준다 —
+    // 게이지만 보면 "지금 레벨에서 얼마나 왔나" 는 알아도 "얼마나 쌓았나" 는
+    // 알 수 없고, 순위가 왜 그런지도 설명되지 않는다.
+    _label.render(canvas, 'TOTAL XP', Vector2(112, 150));
+    _label.render(
+      canvas,
+      _grouped(player.totalXp),
+      Vector2(panelWidth - 24, 150),
+      anchor: Anchor.topRight,
+    );
+  }
+
+  /// 천 단위마다 쉼표를 넣는다. 누적 경험치는 금세 여섯 자리를 넘는다.
+  String _grouped(int value) {
+    final digits = value.toString();
+    final buffer = StringBuffer();
+    for (var i = 0; i < digits.length; i++) {
+      if (i > 0 && (digits.length - i) % 3 == 0) buffer.write(',');
+      buffer.write(digits[i]);
+    }
+    return buffer.toString();
   }
 
   void _renderVitals(Canvas canvas) {
@@ -299,6 +325,14 @@ class CharacterScreen extends PositionComponent
     _renderLabeledBar(
       canvas,
       top: 214,
+      label: 'MANA',
+      ratio: player.mp / player.maxMp,
+      color: GamePalette.mpFill,
+      text: '${player.mp.floor()} / ${player.maxMp.round()}',
+    );
+    _renderLabeledBar(
+      canvas,
+      top: 240,
       label: 'ENERGY',
       ratio: player.energy / player.maxEnergy,
       color: GamePalette.energyFill,
@@ -327,7 +361,7 @@ class CharacterScreen extends PositionComponent
   /// 전투 능력치와 이번 잠입의 전적을 두 단으로 보여준다.
   void _renderColumns(Canvas canvas) {
     final player = game.player;
-    const top = 252.0;
+    const top = 278.0;
 
     _section.render(canvas, 'COMBAT', Vector2(24, top));
     _renderStatRows(
@@ -387,7 +421,7 @@ class CharacterScreen extends PositionComponent
   }
 
   void _renderBuffs(Canvas canvas) {
-    const top = 386.0;
+    const top = 412.0;
     _section.render(canvas, 'BUFFS', Vector2(24, top));
 
     final buffs = game.player.buffs.active;

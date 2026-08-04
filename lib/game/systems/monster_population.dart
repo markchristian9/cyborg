@@ -2,9 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flame/components.dart';
 
-import '../entities/enemy.dart';
 import '../iso.dart';
 import '../level/level_map.dart';
+import 'monster_codex.dart';
 
 /// 월드에 상주하는 로봇 한 개체의 논리 정보.
 ///
@@ -13,22 +13,24 @@ import '../level/level_map.dart';
 class MonsterSeed {
   MonsterSeed({
     required this.id,
-    required this.kind,
+    required this.species,
     required this.home,
     required this.hpMultiplier,
-    required this.damageMultiplier,
   }) : position = home.clone();
 
   /// 개체 고유 번호. 활성화된 [Enemy]와 시드를 연결하는 열쇠다.
   final int id;
 
-  final EnemyKind kind;
+  /// 이 자리에 주둔한 몬스터의 종.
+  final MonsterSpecies species;
+
+  /// 골격 계통. 종까지는 필요 없는 곳에서 쓴다.
+  MonsterBuild get build => species.build;
 
   /// 배치된 원래 자리. 리스폰과 순찰 기준점이 된다.
   final Vector2 home;
 
   final double hpMultiplier;
-  final double damageMultiplier;
 
   /// 마지막으로 관측된 위치. 비활성화될 때 갱신된다.
   Vector2 position;
@@ -170,6 +172,9 @@ class MonsterPopulation {
         // 0(중심) ~ 1(외곽). 바깥일수록 적진 깊숙한 곳이다.
         final depth = (distance / halfSpan).clamp(0.0, 1.0);
 
+        // 이 구역이 요구하는 위험 등급(1~200). 주둔 몬스터의 레벨대가 된다.
+        final regionLevel = MonsterCodex.regionLevel(distance, halfSpan);
+
         // 청크당 개체 수. 외곽 청크는 소대 규모로 몰려 있다.
         final squad = 3 + random.nextInt(4) + (depth * 6).round();
         final list = <MonsterSeed>[];
@@ -181,20 +186,25 @@ class MonsterPopulation {
           );
           if (footing == null) continue;
 
-          final kind = _rollKind(random, depth);
           list.add(
             MonsterSeed(
               id: nextId++,
-              kind: kind,
+              // 같은 구역 안에서도 개체마다 레벨이 조금씩 다르다.
+              species: MonsterCodex.roll(random, regionLevel, spread: 4),
               home: footing,
-              hpMultiplier: 1 + depth * 1.6 + random.nextDouble() * 0.2,
-              damageMultiplier: 1 + depth * 0.9,
+              // 종 자체가 레벨을 담고 있으므로 배율은 개체 편차용으로만 쓴다.
+              hpMultiplier: 0.95 + random.nextDouble() * 0.2,
             ),
           );
         }
 
-        // 외곽에는 구역 지휘 유닛이 드물게 주둔한다.
-        if (depth > 0.45 && random.nextDouble() < 0.07) {
+        // 구역마다 지휘 유닛이 드물게 주둔한다. 바깥일수록 흔해진다.
+        //
+        // 외곽에만 두면 시작 근처 구역에는 보스가 하나도 서지 않아
+        // 초반 레벨대의 지휘급을 월드에서 만날 길이 사라진다.
+        final sovereignChance = 0.03 + depth * 0.09;
+        if (distance > safeRadius * 1.6 &&
+            random.nextDouble() < sovereignChance) {
           final footing = findFootingNear(
             baseX + kChunkTiles ~/ 2,
             baseY + kChunkTiles ~/ 2,
@@ -203,10 +213,10 @@ class MonsterPopulation {
             list.add(
               MonsterSeed(
                 id: nextId++,
-                kind: EnemyKind.commander,
+                // 구역 등급에 걸맞은 지휘급을 세운다.
+                species: MonsterCodex.sovereignNear(regionLevel),
                 home: footing,
-                hpMultiplier: 1 + depth * 1.2,
-                damageMultiplier: 1 + depth * 0.8,
+                hpMultiplier: 1.0 + random.nextDouble() * 0.15,
               ),
             );
           }
@@ -221,11 +231,4 @@ class MonsterPopulation {
     return MonsterPopulation._(map: map, byChunk: byChunk, total: total);
   }
 
-  /// 구역 깊이에 따라 기종을 뽑는다.
-  static EnemyKind _rollKind(math.Random random, double depth) {
-    final roll = random.nextDouble();
-    if (roll < 0.10 + depth * 0.22) return EnemyKind.heavy;
-    if (roll < 0.45 + depth * 0.20) return EnemyKind.sentry;
-    return EnemyKind.scout;
-  }
 }

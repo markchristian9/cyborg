@@ -20,8 +20,12 @@
 pub mod auth;
 pub mod character;
 pub mod leaderboard;
+pub mod world;
 
 use spacetimedb::{Identity, ReducerContext, Timestamp, ViewContext, view};
+
+// 접속이 끊길 때 월드에서 내보내기 위해 필요하다([`on_disconnect`]).
+use world::world_player;
 
 // ── 테이블 ──────────────────────────────────────────────────────────────
 
@@ -102,16 +106,36 @@ pub struct PlayerCharacter {
     /// ([`character::normalize_kind`] 가 판정한다).
     pub kind: String,
 
-    /// 인덱스가 붙어 있는 이유는 조회가 아니라 **리더보드** 때문이다. view 는
-    /// 읽기 전용 핸들만 받아 전체 스캔(`iter`)을 할 수 없고, 인덱스 범위 조회로만
-    /// 여러 행을 훑을 수 있다([`leaderboard`] 모듈 참고).
+    /// 지금 레벨. **[`total_xp`](PlayerCharacter::total_xp) 에서 유도한 파생값**이며
+    /// 진실이 아니다. 서버가 누적 경험치를 받을 때마다 다시 계산해 채운다.
+    ///
+    /// 파생값을 굳이 저장하는 이유는 두 가지다 — 인덱스를 걸어야 view 가 표를
+    /// 훑을 수 있고(읽기 전용 핸들에는 `iter` 가 없다), 캐릭터 목록처럼 레벨만
+    /// 필요한 화면이 매번 역함수를 돌리지 않아도 된다.
     #[index(btree)]
     pub level: u32,
 
-    pub xp: u64,
+    /// 지금 레벨 안에서 다음 레벨까지 쌓은 진행도. 이것도 파생값이다.
+    pub xp: u32,
 
     pub created_at: Timestamp,
     pub last_played_at: Timestamp,
+
+    /// 지금까지 얻은 **경험치의 총합**. 성장에 관한 유일한 진실이다.
+    ///
+    /// 레벨과 진행도는 여기서 나온다([`leaderboard::level_and_progress`]).
+    /// 값 하나만 저장하므로 "레벨은 20 인데 경험치는 3 레벨분" 같은 어긋난 상태가
+    /// 존재할 수 없고, 순위도 이 값 하나로 완전히 갈린다.
+    ///
+    /// **맨 끝에 있고 기본값이 있어야 한다.** 이미 배포된 표에 열을 더하는 자동
+    /// 마이그레이션은 두 조건을 모두 요구한다 — 중간에 끼우면 기존 행을 읽지
+    /// 못하고, 기본값이 없으면 기존 행의 새 열을 채우지 못한다. 0 으로 두면 옛
+    /// 행은 1 레벨에서 다시 시작한다.
+    ///
+    /// 접미사로 타입을 못 박아야 한다. 그냥 `0` 으로 두면 기본값의 인코딩 폭이
+    /// 열 타입과 어긋나 스키마 추출이 "data too short" 로 실패한다.
+    #[default(0u32)]
+    pub total_xp: u32,
 }
 
 // ── view ────────────────────────────────────────────────────────────────
@@ -164,7 +188,8 @@ pub(crate) fn require_session(ctx: &ReducerContext) -> Result<Session, String> {
 // ── 라이프사이클 ────────────────────────────────────────────────────────
 
 #[spacetimedb::reducer(init)]
-pub fn init(_ctx: &ReducerContext) {
+pub fn init(ctx: &ReducerContext) {
+    world::bootstrap(ctx);
     log::info!("cyborg 모듈 초기화 완료");
 }
 
@@ -181,5 +206,9 @@ pub fn on_connect(ctx: &ReducerContext) {
 /// [`auth::logout`] 을 명시적으로 부를 때만 사라진다.
 #[spacetimedb::reducer(client_disconnected)]
 pub fn on_disconnect(ctx: &ReducerContext) {
+    // 세션과 달리 월드에서는 즉시 내보낸다. 남겨 두면 조종하는 사람이 없는
+    // 캐릭터가 사냥터 한복판에 서 있게 되고, 다른 요원 눈에는 가만히 서서
+    // 몹을 선점만 하고 있는 것으로 보인다.
+    ctx.db.world_player().identity().delete(ctx.sender());
     log::debug!("연결 해제: {}", ctx.sender());
 }

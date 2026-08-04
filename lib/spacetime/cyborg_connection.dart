@@ -13,6 +13,34 @@ const String kCyborgDatabase = 'withcenter-cyborg';
 /// maincloud 는 wss/https 로만 받는다. 로컬 서버로 바꾸면 `false` 로 둔다.
 const bool kCyborgSsl = true;
 
+/// 접속하자마자 거는 구독.
+///
+/// **view 도 구독해야 행이 온다.** 이름이 `my_*` 라 서버가 알아서 밀어 줄 것
+/// 같지만 그렇지 않다 — 구독하지 않으면 reducer 는 멀쩡히 성공하는데 클라이언트
+/// 캐시는 영원히 비어 있어, "가입은 됐는데 로그인 화면에 그대로 있는" 증상이
+/// 된다(`test/spacetime_integration_test.dart` 가 이 조합을 지킨다).
+///
+/// 실제 테이블(`account`·`account_secret`·`session`·`player_character`)은 모두
+/// 비공개라 구독 대상이 아니다.
+///
+/// 여기 있는 셋은 앱이 켜져 있는 내내 필요하다. 리더보드는 볼 때만 필요하므로
+/// 따로 뺐다([kLeaderboardSubscriptions]).
+const List<String> kCyborgViewSubscriptions = [
+  'SELECT * FROM my_account',
+  'SELECT * FROM my_session',
+  'SELECT * FROM my_characters',
+];
+
+/// 리더보드 화면이 떠 있는 동안에만 거는 구독.
+///
+/// 순위표는 **누가 레벨업하든** 다시 계산되어 구독자 전원에게 밀려온다. 월드에
+/// 사람이 많을수록 그 빈도가 올라가므로, 아무도 보고 있지 않은 동안까지 받아 둘
+/// 이유가 없다. 화면을 열 때 걸고 닫을 때 푼다.
+const List<String> kLeaderboardSubscriptions = [
+  'SELECT * FROM leaderboard',
+  'SELECT * FROM my_rank',
+];
+
 /// SpacetimeDB 접속 토큰을 기기에 저장한다.
 ///
 /// 이 토큰은 곧 **이 기기의 identity** 이고, 서버의 `session` 표가 identity 를

@@ -5,9 +5,13 @@ import 'dart:async';
 import 'package:spacetimedb_sdk/codegen.dart';
 import 'reducers.dart';
 import 'reducer_args.dart';
+import 'monster_kill.dart';
+import 'monster_tick_timer.dart';
+import 'world_player.dart';
+import 'account_secret.dart';
+import 'monster.dart';
 import 'account.dart';
 import 'session.dart';
-import 'account_secret.dart';
 import 'leaderboard_entry.dart';
 import 'player_character.dart';
 
@@ -68,18 +72,36 @@ class SpacetimeDbClient {
     subscriptions.clearSyncErrors();
   }
 
-  TableCache<Account> get account {
-    return subscriptions.cache.getTableByTypedName<Account>('account');
+  TableCache<MonsterKill> get monsterKill {
+    return subscriptions.cache.getTableByTypedName<MonsterKill>('monster_kill');
   }
 
-  TableCache<Session> get session {
-    return subscriptions.cache.getTableByTypedName<Session>('session');
+  TableCache<MonsterTickTimer> get monsterTickTimer {
+    return subscriptions.cache.getTableByTypedName<MonsterTickTimer>(
+      'monster_tick_timer',
+    );
+  }
+
+  TableCache<WorldPlayer> get worldPlayer {
+    return subscriptions.cache.getTableByTypedName<WorldPlayer>('world_player');
   }
 
   TableCache<AccountSecret> get accountSecret {
     return subscriptions.cache.getTableByTypedName<AccountSecret>(
       'account_secret',
     );
+  }
+
+  TableCache<Monster> get monster {
+    return subscriptions.cache.getTableByTypedName<Monster>('monster');
+  }
+
+  TableCache<Account> get account {
+    return subscriptions.cache.getTableByTypedName<Account>('account');
+  }
+
+  TableCache<Session> get session {
+    return subscriptions.cache.getTableByTypedName<Session>('session');
   }
 
   TableCache<LeaderboardEntry> get leaderboardEntry {
@@ -163,6 +185,26 @@ class SpacetimeDbClient {
       queuePolicy: queuePolicy,
     );
 
+    subscriptionManager.cache.registerDecoder<MonsterKill>(
+      'monster_kill',
+      MonsterKillDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<MonsterTickTimer>(
+      'monster_tick_timer',
+      MonsterTickTimerDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<WorldPlayer>(
+      'world_player',
+      WorldPlayerDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<AccountSecret>(
+      'account_secret',
+      AccountSecretDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<Monster>(
+      'monster',
+      MonsterDecoder(),
+    );
     subscriptionManager.cache.registerDecoder<Account>(
       'account',
       AccountDecoder(),
@@ -170,10 +212,6 @@ class SpacetimeDbClient {
     subscriptionManager.cache.registerDecoder<Session>(
       'session',
       SessionDecoder(),
-    );
-    subscriptionManager.cache.registerDecoder<AccountSecret>(
-      'account_secret',
-      AccountSecretDecoder(),
     );
     subscriptionManager.cache.registerDecoder<LeaderboardEntry>(
       'leaderboard_entry',
@@ -205,14 +243,20 @@ class SpacetimeDbClient {
       SessionDecoder(),
     );
 
+    subscriptionManager.reducerRegistry.register(attackMonsterDef);
     subscriptionManager.reducerRegistry.register(changePasswordDef);
     subscriptionManager.reducerRegistry.register(createCharacterDef);
     subscriptionManager.reducerRegistry.register(deleteCharacterDef);
+    subscriptionManager.reducerRegistry.register(ensureWorldPopulatedDef);
+    subscriptionManager.reducerRegistry.register(enterWorldDef);
+    subscriptionManager.reducerRegistry.register(leaveWorldDef);
     subscriptionManager.reducerRegistry.register(loginDef);
     subscriptionManager.reducerRegistry.register(logoutDef);
+    subscriptionManager.reducerRegistry.register(moveToDef);
     subscriptionManager.reducerRegistry.register(registerAccountDef);
     subscriptionManager.reducerRegistry.register(reportProgressDef);
     subscriptionManager.reducerRegistry.register(selectCharacterDef);
+    subscriptionManager.reducerRegistry.register(teleportToDef);
 
     final client = SpacetimeDbClient._(
       connection: connection,

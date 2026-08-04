@@ -2,6 +2,22 @@
 
 import 'package:spacetimedb_sdk/codegen.dart';
 
+class AttackMonsterArgs {
+  AttackMonsterArgs({required this.monsterId});
+
+  final Int64 monsterId;
+}
+
+class AttackMonsterArgsDecoder implements ReducerArgDecoder<AttackMonsterArgs> {
+  const AttackMonsterArgsDecoder();
+
+  @override
+  AttackMonsterArgs decode(BsatnDecoder decoder) {
+    final monsterId = decoder.readU64();
+    return AttackMonsterArgs(monsterId: monsterId);
+  }
+}
+
 class ChangePasswordArgs {
   ChangePasswordArgs({
     required this.currentPassword,
@@ -65,6 +81,46 @@ class DeleteCharacterArgsDecoder
   }
 }
 
+class EnsureWorldPopulatedArgs {
+  EnsureWorldPopulatedArgs();
+}
+
+class EnsureWorldPopulatedArgsDecoder
+    implements ReducerArgDecoder<EnsureWorldPopulatedArgs> {
+  const EnsureWorldPopulatedArgsDecoder();
+
+  @override
+  EnsureWorldPopulatedArgs decode(BsatnDecoder decoder) {
+    return EnsureWorldPopulatedArgs();
+  }
+}
+
+class EnterWorldArgs {
+  EnterWorldArgs();
+}
+
+class EnterWorldArgsDecoder implements ReducerArgDecoder<EnterWorldArgs> {
+  const EnterWorldArgsDecoder();
+
+  @override
+  EnterWorldArgs decode(BsatnDecoder decoder) {
+    return EnterWorldArgs();
+  }
+}
+
+class LeaveWorldArgs {
+  LeaveWorldArgs();
+}
+
+class LeaveWorldArgsDecoder implements ReducerArgDecoder<LeaveWorldArgs> {
+  const LeaveWorldArgsDecoder();
+
+  @override
+  LeaveWorldArgs decode(BsatnDecoder decoder) {
+    return LeaveWorldArgs();
+  }
+}
+
 class LoginArgs {
   LoginArgs({required this.email, required this.password});
 
@@ -97,6 +153,25 @@ class LogoutArgsDecoder implements ReducerArgDecoder<LogoutArgs> {
   }
 }
 
+class MoveToArgs {
+  MoveToArgs({required this.gridX, required this.gridY});
+
+  final double gridX;
+
+  final double gridY;
+}
+
+class MoveToArgsDecoder implements ReducerArgDecoder<MoveToArgs> {
+  const MoveToArgsDecoder();
+
+  @override
+  MoveToArgs decode(BsatnDecoder decoder) {
+    final gridX = decoder.readF32();
+    final gridY = decoder.readF32();
+    return MoveToArgs(gridX: gridX, gridY: gridY);
+  }
+}
+
 class RegisterAccountArgs {
   RegisterAccountArgs({required this.email, required this.password});
 
@@ -118,11 +193,9 @@ class RegisterAccountArgsDecoder
 }
 
 class ReportProgressArgs {
-  ReportProgressArgs({required this.level, required this.xp});
+  ReportProgressArgs({required this.totalXp});
 
-  final int level;
-
-  final Int64 xp;
+  final int totalXp;
 }
 
 class ReportProgressArgsDecoder
@@ -131,9 +204,8 @@ class ReportProgressArgsDecoder
 
   @override
   ReportProgressArgs decode(BsatnDecoder decoder) {
-    final level = decoder.readU32();
-    final xp = decoder.readU64();
-    return ReportProgressArgs(level: level, xp: xp);
+    final totalXp = decoder.readU32();
+    return ReportProgressArgs(totalXp: totalXp);
   }
 }
 
@@ -154,6 +226,36 @@ class SelectCharacterArgsDecoder
   }
 }
 
+class TeleportToArgs {
+  TeleportToArgs({
+    required this.destination,
+    required this.gridX,
+    required this.gridY,
+  });
+
+  final String destination;
+
+  final double gridX;
+
+  final double gridY;
+}
+
+class TeleportToArgsDecoder implements ReducerArgDecoder<TeleportToArgs> {
+  const TeleportToArgsDecoder();
+
+  @override
+  TeleportToArgs decode(BsatnDecoder decoder) {
+    final destination = decoder.readString();
+    final gridX = decoder.readF32();
+    final gridY = decoder.readF32();
+    return TeleportToArgs(destination: destination, gridX: gridX, gridY: gridY);
+  }
+}
+
+const attackMonsterDef = ReducerDef<AttackMonsterArgs>(
+  'attack_monster',
+  AttackMonsterArgsDecoder(),
+);
 const changePasswordDef = ReducerDef<ChangePasswordArgs>(
   'change_password',
   ChangePasswordArgsDecoder(),
@@ -166,8 +268,21 @@ const deleteCharacterDef = ReducerDef<DeleteCharacterArgs>(
   'delete_character',
   DeleteCharacterArgsDecoder(),
 );
+const ensureWorldPopulatedDef = ReducerDef<EnsureWorldPopulatedArgs>(
+  'ensure_world_populated',
+  EnsureWorldPopulatedArgsDecoder(),
+);
+const enterWorldDef = ReducerDef<EnterWorldArgs>(
+  'enter_world',
+  EnterWorldArgsDecoder(),
+);
+const leaveWorldDef = ReducerDef<LeaveWorldArgs>(
+  'leave_world',
+  LeaveWorldArgsDecoder(),
+);
 const loginDef = ReducerDef<LoginArgs>('login', LoginArgsDecoder());
 const logoutDef = ReducerDef<LogoutArgs>('logout', LogoutArgsDecoder());
+const moveToDef = ReducerDef<MoveToArgs>('move_to', MoveToArgsDecoder());
 const registerAccountDef = ReducerDef<RegisterAccountArgs>(
   'register_account',
   RegisterAccountArgsDecoder(),
@@ -179,4 +294,8 @@ const reportProgressDef = ReducerDef<ReportProgressArgs>(
 const selectCharacterDef = ReducerDef<SelectCharacterArgs>(
   'select_character',
   SelectCharacterArgsDecoder(),
+);
+const teleportToDef = ReducerDef<TeleportToArgs>(
+  'teleport_to',
+  TeleportToArgsDecoder(),
 );

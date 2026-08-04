@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:spacetimedb_sdk/spacetimedb_sdk.dart' show Int64;
 
+import '../dev/dev_login.dart';
 import '../game/palette.dart';
 import '../spacetime/generated/player_character.dart';
 import 'cyborg_kind.dart';
@@ -32,6 +33,98 @@ class _CharacterSelectScreenState extends State<CharacterSelectScreen> {
   bool _creating = false;
 
   @override
+  void initState() {
+    super.initState();
+    if (!devAutopilotEnabled) return;
+
+    // 서버 상태가 바뀔 때마다 다음 한 걸음을 다시 판단한다. 캐릭터를 만들거나
+    // 고르면 view 가 갱신되고, 그 갱신이 다음 걸음을 부른다.
+    widget.session.addListener(_pilot);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _pilot());
+  }
+
+  @override
+  void dispose() {
+    if (devAutopilotEnabled) widget.session.removeListener(_pilot);
+    super.dispose();
+  }
+
+  // ── 자동 조종 ─────────────────────────────────────────────────────────
+
+  /// 서버 응답을 기다리는 중인지. 같은 걸음을 두 번 밟지 않게 막는다.
+  bool _pilotBusy = false;
+
+  /// 출격까지 끝났는지. 끝난 뒤에는 사람이 화면을 다시 열어도 개입하지 않는다.
+  bool _pilotDone = false;
+
+  /// 헛도는 것을 막는 시도 한도.
+  ///
+  /// 캐릭터 칸이 꽉 찼거나 이름이 거절당하는 상황은 다시 시도해도 결과가 같다.
+  /// 무한히 재시도하면 로그만 채우고 서버에 부담을 준다.
+  int _pilotAttempts = 0;
+  static const int _maxPilotAttempts = 40;
+
+  /// 지정된 캐릭터로 월드까지 들어간다.
+  ///
+  /// 한 번에 한 걸음만 밟고 돌아온다 — 만들기, 고르기, 출격. 각 걸음의 결과는
+  /// 서버 view 로 돌아오고, 그 갱신이 이 함수를 다시 부른다. 걸음을 한꺼번에
+  /// 이어 붙이지 않는 이유는, 서버가 거절했을 때 다음 걸음이 잘못된 전제 위에서
+  /// 실행되는 것을 막기 위해서다.
+  Future<void> _pilot() async {
+    if (_pilotDone || _pilotBusy || !mounted) return;
+    if (_pilotAttempts++ >= _maxPilotAttempts) return;
+
+    _pilotBusy = true;
+    try {
+      final session = widget.session;
+      final wanted = kDevCharacterName;
+
+      PlayerCharacter? mine;
+      for (final character in session.characters) {
+        if (character.name == wanted) {
+          mine = character;
+          break;
+        }
+      }
+
+      if (mine == null) {
+        devLog('$wanted 캐릭터가 없다 — $kDevCharacterKind 로 만든다');
+        final ok = await session.createCharacter(
+          name: wanted,
+          kind: kDevCharacterKind,
+        );
+        if (!ok) devLog('캐릭터 생성 거절됨: ${session.error}');
+        return;
+      }
+
+      if (session.selectedCharacter?.id != mine.id) {
+        devLog('$wanted 을(를) 고른다');
+        final ok = await session.selectCharacter(mine.id);
+        if (!ok) devLog('캐릭터 선택 거절됨: ${session.error}');
+        return;
+      }
+
+      _pilotDone = true;
+      devLog('$wanted 로 월드에 진입한다');
+      widget.onStart(mine);
+    } finally {
+      _pilotBusy = false;
+
+      // 한 박자 뒤 상태를 다시 본다. 서버가 보내는 view 갱신은 reducer 호출이
+      // 끝나기 **전에** 도착할 수 있는데, 그 알림은 아직 이 걸음이 진행 중이라
+      // 무시된다. 그것만 믿으면 마지막 갱신을 놓친 채로 멈춘다.
+      //
+      // 이 재시도는 반드시 finally 안에 있어야 한다 — 걸음마다 return 으로
+      // 빠져나오므로 블록 뒤에 두면 영영 실행되지 않는다.
+      //
+      // 이미 끝났으면 [_pilotDone] 이, 헛돌면 [_maxPilotAttempts] 가 멈춘다.
+      if (!_pilotDone && mounted) {
+        Future.delayed(const Duration(milliseconds: 400), _pilot);
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final session = widget.session;
     final characters = session.characters;
@@ -44,17 +137,24 @@ class _CharacterSelectScreenState extends State<CharacterSelectScreen> {
           ? _CreateCharacterView(
               session: session,
               // 첫 캐릭터를 만드는 중이라면 돌아갈 목록이 없다.
-              onCancel: characters.isEmpty
-                  ? null
-                  : () => setState(() => _creating = false),
-              onCreated: () => setState(() => _creating = false),
+              onCancel: characters.isEmpty ? null : () => _setCreating(false),
+              onCreated: () => _setCreating(false),
             )
           : _CharacterListView(
               session: session,
               onStart: widget.onStart,
-              onCreateNew: () => setState(() => _creating = true),
+              onCreateNew: () => _setCreating(true),
             ),
     );
+  }
+
+  /// 목록과 만들기 화면을 오간다.
+  ///
+  /// 오갈 때마다 직전 거절 사유를 지운다. 남겨 두면 만들기에서 받은 "같은
+  /// 이름의 캐릭터가 이미 있다" 가 목록 화면에 그대로 떠 있게 된다.
+  void _setCreating(bool value) {
+    widget.session.clearError();
+    setState(() => _creating = value);
   }
 }
 
@@ -131,7 +231,7 @@ class _CharacterListView extends StatelessWidget {
             busy: session.busy,
             accent: selected == null
                 ? GamePalette.textDim
-                : CyborgKind.fromId(selected.kind).accent,
+                : GamePalette.hudBorder,
             onPressed: selected == null ? null : () => onStart(selected),
           ),
         ],
@@ -146,7 +246,7 @@ class _CharacterListView extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF141A24),
+        backgroundColor: GamePalette.floorBase,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(4),
           side: BorderSide(
@@ -210,11 +310,11 @@ class _CharacterCard extends StatelessWidget {
         duration: const Duration(milliseconds: 180),
         decoration: BoxDecoration(
           color: selected
-              ? kind.accent.withValues(alpha: 0.08)
+              ? GamePalette.hudBorder.withValues(alpha: 0.08)
               : GamePalette.hudBackground,
           border: Border.all(
             color: selected
-                ? kind.accent
+                ? GamePalette.hudBorder
                 : GamePalette.floorGrid.withValues(alpha: 0.8),
             width: selected ? 1.8 : 1,
           ),
@@ -251,7 +351,7 @@ class _CharacterCard extends StatelessWidget {
                         'Lv.${character.level} · ${kind.codename}',
                         style: TextStyle(
                           color: selected
-                              ? kind.accent
+                              ? GamePalette.hudBorder
                               : GamePalette.textDim.withValues(alpha: 0.7),
                           fontSize: 11,
                           letterSpacing: 1,
@@ -320,7 +420,12 @@ class _AddCharacterCard extends StatelessWidget {
   }
 }
 
-/// 계정 메뉴(로그아웃).
+/// 화면 오른쪽 위에 고정으로 붙는 계정 메뉴.
+///
+/// 로그인한 뒤의 **모든 화면**(캐릭터 목록·요원 등록·게임 월드)에서 같은 자리에
+/// 있어야 한다. 게임 안에서는 Flame 쪽 `WorldMenu` 가 같은 역할을 하며, 이쪽은
+/// 게임 밖 화면을 담당한다. 아이콘을 그쪽과 같은 햄버거로 맞춰, 어느 화면에 있든
+/// "오른쪽 위 ≡ 를 누르면 나가는 길이 있다" 는 규칙이 깨지지 않게 한다.
 class _AccountMenu extends StatelessWidget {
   const _AccountMenu({required this.session});
 
@@ -332,10 +437,9 @@ class _AccountMenu extends StatelessWidget {
 
     return PopupMenuButton<String>(
       enabled: !session.busy,
-      color: const Color(0xFF141A24),
-      icon: const Icon(Icons.account_circle_outlined,
-          color: GamePalette.textDim),
-      tooltip: email,
+      color: GamePalette.floorBase,
+      icon: const Icon(Icons.menu, color: GamePalette.textDim),
+      tooltip: email.isEmpty ? '메뉴' : email,
       onSelected: (value) {
         if (value == 'logout') session.logout();
       },
@@ -350,9 +454,24 @@ class _AccountMenu extends StatelessWidget {
         const PopupMenuDivider(),
         const PopupMenuItem<String>(
           value: 'logout',
-          child: Text(
-            '로그아웃',
-            style: TextStyle(color: GamePalette.textPrimary, fontSize: 14),
+          child: Row(
+            children: [
+              // 되돌리려면 다시 로그인해야 하는 동작이라 경고색으로 그린다.
+              Icon(
+                Icons.logout_rounded,
+                size: 17,
+                color: GamePalette.hpFillLow,
+              ),
+              SizedBox(width: 10),
+              Text(
+                '로그아웃',
+                style: TextStyle(
+                  color: GamePalette.hpFillLow,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -399,10 +518,7 @@ class _CreateCharacterViewState extends State<_CreateCharacterView> {
     }
     setState(() => _localError = null);
 
-    final ok = await widget.session.createCharacter(
-      name: name,
-      kind: _kind.id,
-    );
+    final ok = await widget.session.createCharacter(name: name, kind: _kind.id);
     if (ok && mounted) widget.onCreated();
   }
 
@@ -430,6 +546,10 @@ class _CreateCharacterViewState extends State<_CreateCharacterView> {
                   subtitle: '몸을 고르고 호출 부호를 정한다.',
                 ),
               ),
+              // 첫 캐릭터를 만드는 중이면 목록으로 돌아갈 수도 없다. 여기에
+              // 메뉴가 없으면 계정을 잘못 골랐을 때 앱을 지우는 것 말고는
+              // 빠져나갈 길이 없어진다.
+              _AccountMenu(session: widget.session),
             ],
           ),
           const SizedBox(height: 20),
@@ -480,7 +600,7 @@ class _CreateCharacterViewState extends State<_CreateCharacterView> {
           CyborgButton(
             label: '등록',
             busy: busy,
-            accent: _kind.accent,
+            accent: GamePalette.hudBorder,
             onPressed: _create,
           ),
         ],
@@ -509,10 +629,10 @@ class _KindOption extends StatelessWidget {
         duration: const Duration(milliseconds: 180),
         decoration: BoxDecoration(
           color: selected
-              ? kind.accent.withValues(alpha: 0.08)
+              ? GamePalette.hudBorder.withValues(alpha: 0.08)
               : GamePalette.hudBackground,
           border: Border.all(
-            color: selected ? kind.accent : GamePalette.floorGrid,
+            color: selected ? GamePalette.hudBorder : GamePalette.floorGrid,
             width: selected ? 1.8 : 1,
           ),
           borderRadius: BorderRadius.circular(4),
@@ -532,7 +652,9 @@ class _KindOption extends StatelessWidget {
                   Text(
                     kind.codename,
                     style: TextStyle(
-                      color: selected ? kind.accent : GamePalette.textDim,
+                      color: selected
+                          ? GamePalette.hudBorder
+                          : GamePalette.textDim,
                       fontSize: 13,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 2,

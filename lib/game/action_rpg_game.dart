@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -13,24 +14,34 @@ import 'entities/block.dart';
 import 'entities/enemy.dart';
 import 'entities/iso_entity.dart';
 import 'entities/pickup.dart';
+import 'entities/cyborg_design.dart';
 import 'entities/player.dart';
 import 'entities/projectile.dart';
 import 'fx/explosion.dart';
 import 'fx/hit_spark.dart';
+import 'input/click_move.dart';
 import 'iso.dart';
 import 'level/ground_layer.dart';
 import 'level/level_map.dart';
 import 'level/safe_zone.dart';
+import 'level/teleport_destinations.dart';
 import 'net/game_sync.dart';
+import 'net/leaderboard_source.dart';
 import 'palette.dart';
+import 'systems/auto_hunt.dart';
 import 'systems/drop_table.dart';
+import 'systems/hit_stop.dart';
 import 'systems/inventory.dart';
 import 'systems/level_system.dart';
+import 'systems/monster_codex.dart';
 import 'systems/monster_population.dart';
 import 'systems/wave_director.dart';
+import 'ui/auto_hunt_control.dart';
 import 'ui/character_screen.dart';
 import 'ui/hud.dart';
 import 'ui/inventory_ui.dart';
+import 'ui/leaderboard_screen.dart';
+import 'ui/teleport_sheet.dart';
 import 'ui/touch_controls.dart';
 import 'ui/world_menu.dart';
 
@@ -47,10 +58,36 @@ abstract final class Overlays {
 
 /// 2.5D 아이소메트릭 액션 RPG 본체.
 class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
-  ActionRpgGame({this.sync});
+  ActionRpgGame({
+    this.sync,
+    this.onLogout,
+    LeaderboardSource? leaderboard,
+    int startTotalXp = 0,
+    this.design = CyborgDesign.assault,
+  })  : leaderboard = leaderboard ?? const EmptyLeaderboardSource(),
+        _carriedTotalXp = startTotalXp;
+
+  /// 이번 출격에 쓰는 신체 프레임.
+  ///
+  /// 캐릭터 선택 화면에서 고른 몸이 여기로 들어와 [Player]까지 전달된다.
+  /// 이 값을 넘기지 않으면 선택 화면에서 여성형을 골라도 게임 안에서는
+  /// 기본값인 남성형이 나온다 — 실제로 그런 상태였다.
+  final CyborgDesign design;
 
   /// SpacetimeDB 연동(선택). null이면 완전 오프라인으로 동작한다.
   final GameSync? sync;
+
+  /// 월드 순위표의 출처.
+  ///
+  /// 서버가 없으면 [EmptyLeaderboardSource]가 들어와 메뉴 항목은 그대로 있고
+  /// 화면만 "연결되지 않았다"고 알린다. 순위를 못 본다고 게임을 막지는 않는다.
+  final LeaderboardSource leaderboard;
+
+  /// 월드 메뉴에서 로그아웃을 선택했을 때 호출된다.
+  ///
+  /// 계정과 세션은 게임 바깥(앱 셸)의 몫이라 실제 처리는 넘겨받는 쪽이 한다.
+  /// null이면 메뉴에 로그아웃 항목이 생기지 않는다.
+  final VoidCallback? onLogout;
 
   late LevelMap map;
   late Player player;
@@ -58,12 +95,25 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   late Hud _hud;
   late InventoryPanel _inventoryPanel;
   late CharacterScreen _characterScreen;
+  late LeaderboardScreen _leaderboardScreen;
+  late TeleportSheet _teleportSheet;
   late WorldMenu _worldMenu;
+  late AutoHuntButton _autoHuntButton;
+  late AutoHuntRadiusButton _autoHuntRadiusUp;
+  late AutoHuntRadiusButton _autoHuntRadiusDown;
 
   /// 이 접속에 쓰는 캐릭터 이름.
   ///
   /// 계정 시스템이 붙기 전까지는 기본 호출부호를 쓴다.
   String characterName = 'UNIT-01';
+
+  /// 새로 만드는 [Player] 에게 물려줄 누적 경험치.
+  ///
+  /// 처음에는 서버에 저장된 값이고, 그 뒤로는 **직전 몸체가 쌓은 값**이다.
+  /// 재시작([restart])은 월드를 새로 짜는 것이지 캐릭터를 초기화하는 것이 아니다 —
+  /// 여기에 현재 값을 옮겨 담지 않으면 재시작할 때마다 출격 시점으로 후퇴하고,
+  /// 그러면 서버가 뒤로 가는 보고를 버려 순위가 다시 멈춘다.
+  int _carriedTotalXp;
 
   /// 월드 전역에 상주하는 로봇 개체군의 장부.
   late MonsterPopulation population;
@@ -71,8 +121,26 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 회수한 포션을 담아 두는 가방.
   final Inventory inventory = Inventory();
 
+  /// 지금 월드에 살아 있는 로봇들.
+  ///
+  /// 🛑 **피해를 줄 수 있는 코드는 이 목록을 직접 `for-in` 하지 말 것.**
+  /// [Damageable.applyDamage] 는 대상을 죽일 수 있고, 죽음은 [onEnemyKilled]
+  /// 를 타고 여기서 `remove` 로 돌아온다. 순회 도중 그 일이 벌어지면
+  /// `ConcurrentModificationError` 가 게임 루프의 `update` 안에서 터져 화면이
+  /// 통째로 멈춘다 — 실제로 그렇게 멈췄었다.
+  /// 광역 공격처럼 여러 대상을 때려야 하면 [meleeTargets] 가 주는 **스냅샷**을
+  /// 쓰거나, 직접 `toList()` 로 복사한 뒤 순회한다.
   final List<Enemy> enemies = [];
   final List<Pickup> pickups = [];
+
+  /// 앵커 주변만 도는 자동 사냥의 상태와 판단을 맡는다.
+  ///
+  /// 판단만 하고 실행은 [_updateAutoHunt] 가 한다. 좌표와 생사만 콜백으로
+  /// 넘기므로 컨트롤러 쪽은 Flame 을 전혀 모른다.
+  final AutoHuntController<Enemy> autoHunt = AutoHuntController<Enemy>(
+    gridOf: (enemy) => enemy.grid,
+    aliveOf: (enemy) => enemy.isAlive,
+  );
 
   /// 청크 키(cy * chunksX + cx) → 그 청크에서 마운트한 구조물들.
   final Map<int, List<BlockComponent>> _loadedBlocks = {};
@@ -104,7 +172,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   // 웨이브 진행
   int waveNumber = 0;
   WavePlan? currentPlan;
-  final List<EnemyKind> _spawnQueue = [];
+  final List<MonsterSpecies> _spawnQueue = [];
   double _spawnTimer = 0;
   bool isIntermission = false;
   double intermissionRemaining = 0;
@@ -122,7 +190,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   double comboDisplayTimer = 0;
   double _shakeIntensity = 0;
   double _shakeTimer = 0;
-  double _hitStop = 0;
+  /// 타격감을 위한 짧은 슬로우모션. 재발동 잠금까지 [HitStop] 이 관리한다.
+  final HitStop hitStop = HitStop();
 
   // 입력
   final Set<LogicalKeyboardKey> _pressedKeys = {};
@@ -152,8 +221,13 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
     world.add(GroundLayer(map));
     world.add(SafeZoneField(map.safeZone));
+    // 빈 땅 클릭을 받아 내는 레이어. 월드 맨 아래에 깔려 UI 가 잡지 않은
+    // 탭만 받는다.
+    world.add(ClickMoveLayer());
+    world.add(MovePathHint());
+    world.add(AutoHuntRangeField());
 
-    player = Player(grid: map.respawnPoint());
+    player = _spawnPlayer();
     world.add(player);
 
     camera.backdrop = CyberBackdrop();
@@ -164,6 +238,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     camera.viewport.add(AtmosphereOverlay());
     camera.viewport.add(_hud);
     _addTouchControls();
+    _addTapShields();
 
     // 1 km² 월드는 통째로 들 수 없다. 주변 청크부터 채워 넣는다.
     _refreshBlockStreaming();
@@ -171,6 +246,16 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
     overlays.add(Overlays.mainMenu);
     pauseEngine();
+  }
+
+  /// 물려받은 성장 상태를 채운 새 몸체를 만든다.
+  ///
+  /// 최초 출격에서는 서버에 저장된 값이고, 재시작에서는 직전 몸체의 값이다.
+  Player _spawnPlayer() {
+    // 재시작도 이 함수를 거치므로, 여기서 프레임을 넘기면 다시 태어날 때도
+    // 고른 몸이 유지된다.
+    return Player(grid: map.respawnPoint(), design: design)
+      ..restoreProgress(totalXp: _carriedTotalXp);
   }
 
   double _zoomForSize(Vector2 screenSize) {
@@ -216,7 +301,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         color: GamePalette.energyFill,
         radius: 32,
         onPressed: () => player.tryShoot(),
-        enabledCheck: () => player.energy >= 12,
+        enabledCheck: () => player.mp >= Player.plasmaMpCost,
         position: Vector2.zero(),
         priority: 90,
       ),
@@ -233,9 +318,27 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       ),
     ]);
 
+    // 자동 사냥 토글과 반경 조절. 세 개를 세로로 세워 액션 버튼 열에 잇는다.
+    _autoHuntButton = AutoHuntButton(radius: 32, position: Vector2.zero());
+    _autoHuntRadiusUp = AutoHuntRadiusButton(
+      deltaMeters: 1,
+      position: Vector2.zero(),
+    );
+    _autoHuntRadiusDown = AutoHuntRadiusButton(
+      deltaMeters: -1,
+      position: Vector2.zero(),
+    );
+    camera.viewport.addAll([
+      _autoHuntButton,
+      _autoHuntRadiusUp,
+      _autoHuntRadiusDown,
+    ]);
+
     // 퀵슬롯과 버프 표시는 화면 크기에 맞춰 스스로 자리를 잡는다.
     _inventoryPanel = InventoryPanel();
     _characterScreen = CharacterScreen();
+    _leaderboardScreen = LeaderboardScreen(source: leaderboard);
+    _teleportSheet = TeleportSheet();
     _worldMenu = WorldMenu(
       entries: [
         WorldMenuEntry(
@@ -243,6 +346,24 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
           icon: WorldMenuIcon.character,
           onSelected: openCharacterScreen,
         ),
+        WorldMenuEntry(
+          label: '리더보드',
+          icon: WorldMenuIcon.leaderboard,
+          onSelected: openLeaderboard,
+        ),
+        WorldMenuEntry(
+          label: '텔레포트',
+          icon: WorldMenuIcon.teleport,
+          onSelected: openTeleportSheet,
+        ),
+        // 계정을 붙이지 않은 오프라인 실행에서는 로그아웃할 것이 없다.
+        if (onLogout != null)
+          WorldMenuEntry(
+            label: '로그아웃',
+            icon: WorldMenuIcon.logout,
+            danger: true,
+            onSelected: requestLogout,
+          ),
       ],
     );
     camera.viewport.addAll([
@@ -251,6 +372,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       _worldMenu,
       _inventoryPanel,
       _characterScreen,
+      _leaderboardScreen,
+      _teleportSheet,
     ]);
 
     _layoutTouchControls();
@@ -267,9 +390,48 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
           child.position = Vector2(size.x - 92, size.y - 188);
       }
     }
+    // 자동 사냥은 대시 버튼 위로 이어 세운다. 위가 늘리기, 아래가 줄이기다.
+    // 세로가 짧은 창에서 화면 밖으로 밀리지 않도록 위쪽에 하한을 둔다.
+    final autoHuntY = math.max(52.0, size.y - 298);
+    _autoHuntButton.position = Vector2(size.x - 92, autoHuntY);
+    _autoHuntRadiusUp.position = Vector2(size.x - 92, autoHuntY - 52);
+    _autoHuntRadiusDown.position = Vector2(size.x - 92, autoHuntY + 52);
+
     // 월드 메뉴는 우상단 미니맵 바로 아래에 붙인다.
     _worldMenu.position = Vector2(size.x - 18, 168);
     // 퀵슬롯과 버프 표시는 화면 크기에 맞춰 스스로 자리를 잡는다.
+
+    // 탭 차폐막을 조이스틱·HUD 패널 위에 다시 맞춘다.
+    for (final shield in camera.viewport.children.whereType<TapShield>()) {
+      if (shield.anchor == Anchor.center) {
+        // 조이스틱: 좌하단 여백 40 + 배경 반경 62.
+        shield.position = Vector2(_joystickRadius + 40, size.y - _joystickRadius - 40);
+      }
+    }
+  }
+
+  /// 가상 조이스틱 배경의 반경. 탭 차폐막 크기를 맞추는 데 쓴다.
+  static const double _joystickRadius = 62;
+
+  /// 조이스틱·HUD 위의 탭이 월드로 새지 않도록 차폐막을 덮는다.
+  ///
+  /// Flame 의 `JoystickComponent` 는 `DragCallbacks` 만 갖고 `Hud` 는 표시
+  /// 전용이라, 둘 다 탭을 소비하지 않는다. 그대로 두면 조이스틱을 잡으려다
+  /// 놓치거나 체력바를 건드릴 때마다 캐릭터가 그 화면 지점으로 걸어간다.
+  void _addTapShields() {
+    camera.viewport.addAll([
+      // 조이스틱
+      TapShield(
+        position: Vector2(_joystickRadius + 40, size.y - _joystickRadius - 40),
+        size: Vector2.all(_joystickRadius * 2),
+        anchor: Anchor.center,
+      ),
+      // 좌상단 생존 정보 패널(`Hud._renderVitals`의 사각형과 같은 자리).
+      TapShield(
+        position: Vector2(10, 10),
+        size: Vector2(268, 112),
+      ),
+    ]);
   }
 
   // ── 게임 루프 ───────────────────────────────────────────────────────
@@ -282,15 +444,13 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     }
 
     // 타격감을 위한 짧은 히트스톱.
-    if (_hitStop > 0) {
-      _hitStop -= dt;
-      dt *= 0.25;
-    }
+    dt = hitStop.advance(dt);
 
     survivalTime += dt;
     if (comboDisplayTimer > 0) comboDisplayTimer -= dt;
 
     _applyInput();
+    _updateAutoHunt(dt);
     super.update(dt);
     _pruneRemoved();
     _updateWaves(dt);
@@ -305,7 +465,13 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 보급품은 수명이 다하면 콜백 없이 사라지므로 여기서 정리해 주지 않으면
   /// 목록이 계속 불어난다.
   void _pruneRemoved() {
-    enemies.removeWhere((enemy) => enemy.isRemoved);
+    enemies.removeWhere((enemy) {
+      if (!enemy.isRemoved) return false;
+      // 사라진 개체를 자동 사냥이 계속 참조하면, 없는 대상을 향해 걷거나
+      // 차단 목록이 자라기만 한다.
+      autoHunt.forget(enemy);
+      return true;
+    });
     pickups.removeWhere((pickup) => pickup.isRemoved);
     _activeMonsters.removeWhere((_, enemy) => enemy.isRemoved);
   }
@@ -328,6 +494,94 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       input.normalize();
     }
     player.moveInput.setFrom(input);
+  }
+
+  // ── 자동 사냥 ───────────────────────────────────────────────────────
+
+  /// 자동 사냥이 접근을 멈추는 거리(타일).
+  ///
+  /// 실제 타격 판정은 `사거리 + 대상의 몸 반경`이라 이보다 넓다. 좁은 쪽에
+  /// 맞춰 붙기 때문에 대상의 덩치와 무관하게 반드시 닿는다 — 넓은 쪽에
+  /// 맞추면 몸집이 작은 몬스터에게 닿지 않는 자리에서 헛스윙한다.
+  static const double _autoHuntAttackRange = Player.meleeRange;
+
+  /// 자동 사냥의 판단을 받아 실제 조작으로 옮긴다.
+  void _updateAutoHunt(double dt) {
+    if (!autoHunt.enabled) return;
+
+    // 쓰러져 있는 동안에는 판단하지 않는다. 재가동 처리는 [onPlayerDied] 가
+    // 하고, 그때 자동 사냥도 함께 끊는다.
+    if (!player.isAlive) return;
+
+    // 조이스틱이나 키보드가 들어오면 사람이 이긴다. 상태는 그대로 두므로
+    // 손을 떼면 하던 사냥을 그대로 잇는다.
+    final manual = player.moveInput.length2 > 0.001;
+
+    final decision = autoHunt.update(
+      dt,
+      playerGrid: player.grid,
+      candidates: enemies,
+      attackRangeTiles: _autoHuntAttackRange,
+      suspended: manual,
+    );
+
+    switch (decision.action) {
+      case AutoHuntAction.none:
+        break;
+      case AutoHuntAction.idle:
+        player.clearMoveTarget();
+      case AutoHuntAction.approach:
+      case AutoHuntAction.returnToAnchor:
+        _steerAutoHunt(decision.destination!);
+      case AutoHuntAction.attack:
+        player.clearMoveTarget();
+        // 멈춰 서면 [Player.facing] 이 갱신되지 않는다. 근접 판정은 전방
+        // 부채꼴이므로, 돌려 세우지 않으면 옆에 붙은 대상을 계속 헛친다.
+        player.faceTowards(autoHunt.gridOf(decision.target!));
+        player.tryMelee();
+    }
+  }
+
+  /// 자동 사냥의 목적지를 플레이어에게 전달한다.
+  ///
+  /// 매 프레임 [Player.moveTo] 를 부르지 않는다. 그 메서드는 부를 때마다 벽
+  /// 끼임 감지용 누적 시간을 0 으로 되돌리므로, 프레임마다 부르면 캐릭터가
+  /// 벽에 붙어 한 발도 못 나가는데도 영영 목표를 포기하지 않는다.
+  void _steerAutoHunt(Vector2 destination) {
+    final current = player.moveTarget;
+    if (current != null && (current - destination).length2 < 0.09) return;
+    player.moveTo(destination);
+  }
+
+  /// 자동 사냥을 켜고 끈다. 켤 때는 지금 서 있는 자리가 중심이 된다.
+  void toggleAutoHunt() {
+    if (status != GameStatus.playing || !player.isAlive) return;
+
+    final on = autoHunt.toggle(player.grid);
+    GameAudio.play(Sfx.uiClick);
+    if (on) {
+      _showBanner(
+        '자동 사냥 시작 — 반경 ${autoHunt.radiusMeters.toStringAsFixed(0)}m',
+      );
+    } else {
+      // 끄는 순간 걷던 것을 멈춘다. 남겨 두면 마지막 목표까지 혼자 걸어간다.
+      player.clearMoveTarget();
+      _showBanner('자동 사냥 해제');
+    }
+  }
+
+  /// 자동 사냥 반경을 [deltaMeters] 만큼 조절한다. 1~10 m 를 벗어나지 않는다.
+  void adjustAutoHuntRadius(double deltaMeters) {
+    final before = autoHunt.radiusMeters;
+    autoHunt.radiusMeters = before + deltaMeters;
+
+    if (autoHunt.radiusMeters == before) {
+      // 상한·하한에 닿았다. 눌렸는데 아무 변화가 없으면 고장으로 보이므로
+      // 소리로 알린다.
+      GameAudio.play(Sfx.uiError);
+      return;
+    }
+    GameAudio.play(Sfx.uiClick);
   }
 
   void _updateCamera(double dt) {
@@ -487,6 +741,9 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         seed.active = false;
       }
       enemies.remove(enemy);
+      // 회수된 개체는 더 이상 월드에 없다. 자동 사냥이 쥐고 있으면 사라진
+      // 좌표를 향해 계속 걷는다.
+      autoHunt.forget(enemy);
       enemy.removeFromParent();
     }
 
@@ -506,10 +763,9 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       if (map.safeZone.contains(seed.position.x, seed.position.y)) continue;
 
       final enemy = Enemy(
-        kind: seed.kind,
+        species: seed.species,
         grid: map.nearestWalkable(seed.position),
         hpMultiplier: seed.hpMultiplier,
-        damageMultiplier: seed.damageMultiplier,
       )..seed = seed;
       seed.active = true;
       _activeMonsters[seed.id] = enemy;
@@ -549,8 +805,12 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       return;
     }
 
-    // 남은 적이 없으면 웨이브 종료.
-    if (enemies.every((enemy) => !enemy.isAlive)) {
+    // 웨이브 종료는 이번 웨이브가 투입한 추적대만 보고 판정한다.
+    //
+    // `enemies` 에는 스트리밍으로 깨운 상주 몹도 함께 들어 있다(`seed != null`).
+    // 1 km 월드에는 상주 몹이 흩뿌려져 있어 플레이어 주변에 늘 깨어 있는 개체가
+    // 있고, 그것까지 세면 추적대를 전멸시켜도 웨이브가 끝나지 않는다.
+    if (!enemies.any((enemy) => enemy.seed == null && enemy.isAlive)) {
       _completeWave();
     }
   }
@@ -569,17 +829,16 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
   void _spawnNextEnemy() {
     if (_spawnQueue.isEmpty) return;
-    final kind = _spawnQueue.removeAt(0);
+    final species = _spawnQueue.removeAt(0);
     final plan = currentPlan;
     final spawnGrid = _director.pickSpawnPoint(
       player.grid,
-      minDistance: kind == EnemyKind.commander ? 11 : 9,
+      minDistance: species.isSovereign ? 11 : 9,
     );
     final enemy = Enemy(
-      kind: kind,
+      species: species,
       grid: spawnGrid,
       hpMultiplier: plan?.hpMultiplier ?? 1,
-      damageMultiplier: plan?.damageMultiplier ?? 1,
     );
     enemies.add(enemy);
     world.add(enemy);
@@ -604,6 +863,37 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
   // ── 월드 조작 API ───────────────────────────────────────────────────
 
+  /// 월드 좌표 [worldPoint]를 찍었을 때 플레이어를 그쪽으로 걸어가게 한다.
+  ///
+  /// 찍은 지점이 벽이거나 맵 밖이면 가장 가까운 걸을 수 있는 칸으로 보정한다.
+  /// 경로 탐색은 하지 않는다 — 직선으로 향하되 벽에는 미끄러지고, 막히면
+  /// [Player]가 스스로 목표를 버린다.
+  void movePlayerToWorldPoint(Vector2 worldPoint) {
+    if (status != GameStatus.playing || !player.isAlive) return;
+
+    final rawGrid = screenToGrid(worldPoint);
+    final target = map.nearestWalkable(rawGrid);
+
+    // 주변에 걸을 곳이 없으면 `nearestWalkable`이 월드 중앙 스폰을 돌려준다.
+    // 그대로 목표로 삼으면 허공을 찍었는데 캐릭터가 안전지대까지 걸어가므로
+    // 탭을 없던 일로 한다. 찍은 자리가 원래 걸을 수 있었다면 정상이다.
+    if (map.isWalkableFallback(target) && !map.isWalkableAt(rawGrid.x, rawGrid.y)) {
+      return;
+    }
+
+    // 자동 사냥 중의 클릭은 "저기로 걸어가라"가 아니라 "저기를 중심으로
+    // 사냥하라"는 뜻이다. 걷는 것은 자동 사냥이 이어서 지시하므로 여기서
+    // 직접 목표를 주지 않는다 — 주면 다음 프레임에 곧바로 덮어써진다.
+    if (autoHunt.enabled) {
+      autoHunt.moveAnchor(target);
+      world.add(MoveMarker(grid: target));
+      return;
+    }
+
+    player.moveTo(target);
+    world.add(MoveMarker(grid: target));
+  }
+
   /// 발사체를 월드에 추가한다.
   void spawnProjectile(Projectile projectile) => world.add(projectile);
 
@@ -617,16 +907,25 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   }
 
   /// 근접 공격이 판정할 수 있는 대상 목록.
-  Iterable<Damageable> meleeTargets() sync* {
-    yield* enemies.where((enemy) => enemy.isAlive);
-    yield* _destructibles.where((block) => block.isAlive);
-  }
+  ///
+  /// **반드시 스냅샷을 돌려준다.** 지연 순회(`sync*`)로 [enemies] 를 그대로
+  /// 흘려보내면, 호출부가 순회 도중 [Damageable.applyDamage] 로 적을 죽이는
+  /// 순간 [onEnemyKilled] 가 원본 목록에서 그 적을 지워 다음 걸음에서
+  /// `ConcurrentModificationError` 가 터진다. 그 예외는 게임 루프의 `update`
+  /// 안에서 터지므로 프레임이 통째로 멈춘다 — 전투 중 적을 때리거나 죽는
+  /// 순간 게임이 얼어붙던 원인이 이것이었다.
+  List<Damageable> meleeTargets() => _damageableTargets();
 
   /// 플레이어 발사체가 명중할 수 있는 대상 목록.
-  Iterable<Damageable> projectileTargetsForPlayer() sync* {
-    yield* enemies.where((enemy) => enemy.isAlive);
-    yield* _destructibles.where((block) => block.isAlive);
-  }
+  ///
+  /// [meleeTargets] 와 같은 이유로 스냅샷이다.
+  List<Damageable> projectileTargetsForPlayer() => _damageableTargets();
+
+  /// 지금 살아 있는 피격 대상 전부를 복사해 담는다.
+  List<Damageable> _damageableTargets() => <Damageable>[
+        ...enemies.where((enemy) => enemy.isAlive),
+        ..._destructibles.where((block) => block.isAlive),
+      ];
 
   // ── 전리품 드롭 ─────────────────────────────────────────────────────
 
@@ -679,23 +978,29 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   }
 
   /// 인벤토리의 [kind] 포션을 마신다. 실제로 마셨으면 true.
-  bool usePotion(PickupKind kind) {
+  ///
+  /// [announce]가 false면 배너와 실패음을 내지 않는다. 자동 회복처럼
+  /// 짧은 간격으로 반복 호출되는 쪽에서 화면과 소리를 어지럽히지
+  /// 않도록 쓴다.
+  bool usePotion(PickupKind kind, {bool announce = true}) {
     if (status != GameStatus.playing) return false;
 
     final result = inventory.use(kind, player);
     if (result == null) {
-      GameAudio.play(Sfx.uiError);
+      if (announce) GameAudio.play(Sfx.uiError);
       return false;
     }
 
     // 무엇이 얼마나 회복됐는지 한 줄로 알려 준다.
-    final parts = <String>[];
-    if (result.healed > 0) parts.add('+${result.healed.round()} HP');
-    if (result.energized > 0) parts.add('+${result.energized.round()} EN');
-    if (result.buffed) parts.add(result.spec.name);
-    if (parts.isNotEmpty) _showBanner(parts.join('  '));
+    if (announce) {
+      final parts = <String>[];
+      if (result.healed > 0) parts.add('+${result.healed.round()} HP');
+      if (result.energized > 0) parts.add('+${result.energized.round()} EN');
+      if (result.buffed) parts.add(result.spec.name);
+      if (parts.isNotEmpty) _showBanner(parts.join('  '));
+    }
 
-    GameAudio.play(_lootSfx(kind), volumeScale: 1.2);
+    GameAudio.play(_lootSfx(kind), volumeScale: announce ? 1.2 : 0.7);
     // 강화 효과가 붙는 포션은 징글을 살짝 겹쳐 확실히 알린다.
     if (result.buffed) GameAudio.play(Sfx.levelUp, volumeScale: 0.45);
     return true;
@@ -711,6 +1016,9 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 인벤토리 패널을 열거나 닫는다.
   void toggleInventory() {
     if (status != GameStatus.playing && !_inventoryPanel.isOpen) return;
+    // 인벤토리는 다른 패널과 함께 떠 있어도 되지만, 텔레포트 시트는 화면
+    // 아래를 덮고 입력을 가로채므로 겹쳐 두면 서로 눌리지 않는다.
+    _teleportSheet.close();
     _inventoryPanel.toggle();
     GameAudio.play(Sfx.uiClick);
   }
@@ -718,10 +1026,12 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 캐릭터 정보 화면이 떠 있는지 여부.
   bool get isCharacterScreenOpen => _characterScreen.isOpen;
 
-  /// 캐릭터 정보 화면을 연다. 인벤토리와는 동시에 뜨지 않는다.
+  /// 캐릭터 정보 화면을 연다. 다른 전체 화면 패널과는 동시에 뜨지 않는다.
   void openCharacterScreen() {
     if (status != GameStatus.playing) return;
     _inventoryPanel.close();
+    _leaderboardScreen.close();
+    _teleportSheet.close();
     _characterScreen.open();
     GameAudio.play(Sfx.uiClick);
   }
@@ -742,11 +1052,135 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     }
   }
 
+  /// 리더보드가 떠 있는지 여부.
+  bool get isLeaderboardOpen => _leaderboardScreen.isOpen;
+
+  /// 리더보드를 연다. 다른 전체 화면 패널과는 동시에 뜨지 않는다.
+  void openLeaderboard() {
+    if (status != GameStatus.playing) return;
+    _inventoryPanel.close();
+    _characterScreen.close();
+    _teleportSheet.close();
+    _leaderboardScreen.open();
+    GameAudio.play(Sfx.uiClick);
+  }
+
+  /// 리더보드를 닫는다.
+  void closeLeaderboard() {
+    if (!_leaderboardScreen.isOpen) return;
+    _leaderboardScreen.close();
+    GameAudio.play(Sfx.uiClick);
+  }
+
+  /// 리더보드를 열거나 닫는다.
+  void toggleLeaderboard() {
+    if (_leaderboardScreen.isOpen) {
+      closeLeaderboard();
+    } else {
+      openLeaderboard();
+    }
+  }
+
+  /// 텔레포트 목적지 목록이 떠 있는지 여부.
+  bool get isTeleportSheetOpen => _teleportSheet.isOpen;
+
+  /// 텔레포트 목적지 목록을 연다. 다른 패널과는 동시에 뜨지 않는다.
+  void openTeleportSheet() {
+    if (status != GameStatus.playing) return;
+    _inventoryPanel.close();
+    _characterScreen.close();
+    _leaderboardScreen.close();
+    _teleportSheet.open();
+    GameAudio.play(Sfx.uiClick);
+  }
+
+  /// 텔레포트 목적지 목록을 닫는다.
+  void closeTeleportSheet() {
+    if (!_teleportSheet.isOpen) return;
+    _teleportSheet.close();
+    GameAudio.play(Sfx.uiClick);
+  }
+
+  /// 텔레포트 목적지 목록을 열거나 닫는다.
+  void toggleTeleportSheet() {
+    if (_teleportSheet.isOpen) {
+      closeTeleportSheet();
+    } else {
+      openTeleportSheet();
+    }
+  }
+
+  /// [destination]으로 순간이동한다.
+  ///
+  /// 사망 처리와 같은 후처리가 필요하다. 월드를 가로지르는 이동이라 카메라와
+  /// 스트리밍을 이번 프레임에 바로 맞춰 주지 않으면, 카메라가 한참을 날아가고
+  /// 도착지는 지형도 로봇도 없이 텅 빈 채로 나타난다.
+  void teleportPlayerTo(TeleportDestination destination) {
+    if (status != GameStatus.playing || !player.isAlive) return;
+
+    final point = destination.resolve(map, _random);
+    player.teleportTo(point);
+
+    // 사냥터를 통째로 옮긴 것이므로 중심도 함께 옮긴다. 그대로 두면 도착
+    // 하자마자 월드 반대편의 옛 사냥터를 향해 되돌아 걷는다.
+    if (autoHunt.enabled) autoHunt.moveAnchor(player.grid);
+
+    camera.viewfinder.position = _cameraTarget();
+    _refreshBlockStreaming();
+    _refreshMonsterStreaming();
+
+    _teleportSheet.close();
+
+    spawnEffect(
+      HitSpark(
+        grid: player.grid.clone(),
+        z: 0.6,
+        color: destination.isSafe
+            ? GamePalette.safeZoneGlow
+            : GamePalette.playerAccent,
+        count: 14,
+        spread: 38,
+      ),
+    );
+    GameAudio.play(Sfx.dash);
+    _showBanner('${destination.label} 도착');
+  }
+
+  /// 월드 메뉴에서 로그아웃을 선택했을 때 실행된다.
+  ///
+  /// 세션을 어디까지 정리할지는 앱 셸이 정한다. 게임은 열려 있던 화면을 접고
+  /// 지금까지의 기록을 넘긴 뒤 [onLogout] 을 부르는 데서 손을 뗀다.
+  Future<void> requestLogout() async {
+    closeCharacterScreen();
+    _inventoryPanel.close();
+    _worldMenu.close();
+    reportRunFinished();
+
+    // 로그아웃하면 이 게임 인스턴스가 통째로 사라진다 — 주기 전송이 따라잡을
+    // 기회가 더는 없으므로, 마지막 진행 상황이 서버에 닿을 때까지 기다린 뒤에
+    // 넘긴다. 기다리지 않으면 방금 오른 레벨이 순위에 반영되지 않은 채 나간다.
+    //
+    // 서버가 응답하지 않는다고 로그아웃까지 막지는 않는다. 기록보다 사용자가
+    // 나가려는 의사가 우선이다.
+    final sync = this.sync;
+    if (sync != null) {
+      try {
+        await sync.flushProgress().timeout(const Duration(seconds: 3));
+      } on TimeoutException {
+        // 못 보냈다. 다음 접속에서 더 높은 값을 보내면 그때 반영된다.
+      }
+    }
+
+    onLogout?.call();
+  }
+
   // ── 이벤트 콜백 ─────────────────────────────────────────────────────
 
   /// 적이 파괴되었을 때 호출된다.
   void onEnemyKilled(Enemy enemy) {
     enemies.remove(enemy);
+    // 쓰러진 대상을 붙들고 있으면 시체 앞에서 다음 사냥감을 찾지 않는다.
+    autoHunt.forget(enemy);
 
     // 월드에 상주하던 개체라면 장부에 파괴를 기록한다. 시간이 지나면
     // AI가 같은 자리에 새 유닛을 배치하므로 월드가 텅 비지 않는다.
@@ -757,26 +1191,28 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     }
 
     kills++;
-    score += switch (enemy.kind) {
-      EnemyKind.scout => 15,
-      EnemyKind.sentry => 30,
-      EnemyKind.heavy => 70,
-      EnemyKind.commander => 400,
+    // 점수는 골격 등급과 몬스터 레벨을 함께 반영한다.
+    final baseScore = switch (enemy.build) {
+      MonsterBuild.drone => 15,
+      MonsterBuild.walker => 30,
+      MonsterBuild.siege => 70,
+      MonsterBuild.sovereign => 400,
     };
+    score += (baseScore * (1 + enemy.level * 0.05)).round();
     player.gainXp(
       LevelSystem.killXp(enemy.xpValue, playerLevel: player.level),
     );
-    _hitStop = enemy.isBoss ? 0.16 : 0.05;
+    hitStop.trigger(enemy.isBoss ? 0.16 : 0.05);
 
     // 잔해에서 전리품이 튀어나온다. 후반 웨이브일수록 조금 더 후하다.
     _spawnDrops(
       enemy.grid,
-      DropTables.forEnemy(enemy.kind),
+      DropTables.forEnemy(enemy.build),
       luck: math.min(0.15, waveNumber * 0.01),
       amountMultiplier: 1 + math.min(0.5, waveNumber * 0.02),
     );
 
-    sync?.reportKill(enemy.kind.name, score);
+    sync?.reportKill(enemy.species.codeName, score);
   }
 
   /// 데이터 캐시가 파괴되었을 때 호출된다.
@@ -801,7 +1237,12 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
   /// 전리품 종류에 어울리는 회수음.
   Sfx _lootSfx(PickupKind kind) => switch (kind) {
-        PickupKind.nanoVial || PickupKind.nanoCanister => Sfx.pickupHealth,
+        PickupKind.nanoVial ||
+        PickupKind.nanoCanister ||
+        PickupKind.repairCell ||
+        PickupKind.regenAmpoule ||
+        PickupKind.overhaulKit =>
+          Sfx.pickupHealth,
         PickupKind.energyCell ||
         PickupKind.overchargeCell ||
         PickupKind.combatStim =>
@@ -811,14 +1252,15 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
   /// 플레이어가 피해를 입었을 때 호출된다.
   void onPlayerDamaged() {
-    _hitStop = 0.06;
+    hitStop.trigger(0.06);
   }
 
   /// 레벨업 시 호출된다. [milestone]은 5레벨 단위의 강화 구간인지 여부다.
   void onLevelUp(int level, {bool milestone = false}) {
     _showBanner(milestone ? 'LEVEL UP  $level  ▲BOOST' : 'LEVEL UP  $level');
     shakeCamera(milestone ? 10 : 4, milestone ? 0.3 : 0.2);
-    sync?.reportLevel(level);
+    // 서버에 올리는 것은 누적 하나다. 레벨은 서버가 거기서 다시 계산한다.
+    sync?.reportLevel(level, player.totalXp);
   }
 
   /// 플레이어가 사망했을 때 호출된다.
@@ -828,6 +1270,11 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 곧바로 새 몸체로 재가동된다.
   void onPlayerDied() {
     deaths++;
+
+    // 자동 사냥을 끊는다. 앵커는 쓰러진 자리 근처이므로 그대로 두면 재가동
+    // 직후 자기를 죽인 무리 한가운데로 혼자 걸어 들어가 다시 죽는다.
+    final wasAutoHunting = autoHunt.enabled;
+    if (wasAutoHunting) autoHunt.disable();
 
     // 쓰러진 자리에 잔해를 남긴다.
     spawnEffect(
@@ -858,7 +1305,11 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       ),
     );
     shakeCamera(10, 0.25);
-    _showBanner('SYSTEM REBOOT — 안전지대 재가동');
+    _showBanner(
+      wasAutoHunting
+          ? 'SYSTEM REBOOT — 자동 사냥 해제됨'
+          : 'SYSTEM REBOOT — 안전지대 재가동',
+    );
 
     sync?.reportDeath(deaths: deaths, score: score);
   }
@@ -884,7 +1335,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     status = GameStatus.playing;
     resumeEngine();
     GameAudio.play(Sfx.uiClick);
-    GameAudio.startAmbience();
+    GameAudio.playMusic();
     if (waveNumber == 0) _startWave(1);
   }
 
@@ -913,8 +1364,15 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       ..remove(Overlays.pauseMenu);
     GameAudio.play(Sfx.uiClick);
 
+    // 새 월드로 옮겨 가는 것이지 캐릭터를 갈아 끼우는 것이 아니다. 지금까지의
+    // 성장을 다음 몸체에 그대로 물려준다 — 여기서 놓치면 재시작할 때마다 레벨이
+    // 출격 시점으로 돌아가고, 서버는 그 후퇴를 무시해 순위가 멈춘다.
+    _carriedTotalXp = player.totalXp;
+
     // 월드를 비우고 새 지형을 만든다.
     world.removeAll(world.children.toList());
+    // 새 월드로 옮겨 가므로 옛 월드의 앵커와 타깃은 모두 무효다.
+    autoHunt.disable();
     enemies.clear();
     pickups.clear();
     inventory.clear();
@@ -939,7 +1397,10 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
     world.add(GroundLayer(map));
     world.add(SafeZoneField(map.safeZone));
-    player = Player(grid: map.respawnPoint());
+    world.add(ClickMoveLayer());
+    world.add(MovePathHint());
+    world.add(AutoHuntRangeField());
+    player = _spawnPlayer();
     world.add(player);
     camera.viewfinder.position = _cameraTarget();
 
@@ -976,9 +1437,21 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         case LogicalKeyboardKey.shiftRight:
         case LogicalKeyboardKey.keyL:
           player.tryDash();
+        case LogicalKeyboardKey.keyC:
+          toggleCharacterScreen();
+        case LogicalKeyboardKey.keyB:
+          toggleLeaderboard();
         case LogicalKeyboardKey.escape:
-          // 인벤토리가 열려 있으면 먼저 닫는다.
-          if (_inventoryPanel.isOpen) {
+          // 떠 있는 창이 있으면 먼저 닫는다.
+          if (_teleportSheet.isOpen) {
+            closeTeleportSheet();
+          } else if (_leaderboardScreen.isOpen) {
+            closeLeaderboard();
+          } else if (_characterScreen.isOpen) {
+            closeCharacterScreen();
+          } else if (_worldMenu.isOpen) {
+            _worldMenu.close();
+          } else if (_inventoryPanel.isOpen) {
             _inventoryPanel.close();
           } else if (status == GameStatus.playing) {
             pauseGame();

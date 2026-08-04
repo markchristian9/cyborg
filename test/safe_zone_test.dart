@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
-import 'package:actionrpg/game/entities/enemy.dart';
+import 'package:actionrpg/game/entities/player.dart';
+import 'package:actionrpg/game/systems/monster_codex.dart';
 import 'package:actionrpg/game/iso.dart';
 import 'package:actionrpg/game/level/level_map.dart';
 import 'package:actionrpg/game/level/safe_zone.dart';
@@ -83,19 +84,55 @@ void main() {
   });
 
   group('몬스터 어그로', () {
-    test('모든 기종의 어그로 범위가 1~5 m 안에 있다', () {
-      for (final stats in EnemyStats.table.values) {
+    test('모든 종의 어그로 범위가 1~9 m 안에 있다', () {
+      for (final stats in MonsterCodex.all.map((s) => s.stats)) {
         expect(stats.aggroMinMeters, greaterThanOrEqualTo(kAggroMinMeters));
         expect(stats.aggroMaxMeters, lessThanOrEqualTo(kAggroMaxMeters));
         expect(stats.aggroMinMeters, lessThanOrEqualTo(stats.aggroMaxMeters));
       }
     });
 
-    test('기종마다 어그로 폭이 다르게 잡혀 있다', () {
-      final scout = EnemyStats.table[EnemyKind.scout]!;
-      final sentry = EnemyStats.table[EnemyKind.sentry]!;
-      // 정찰기가 순찰기보다 예민하다.
-      expect(scout.aggroMinMeters, greaterThan(sentry.aggroMaxMeters));
+    test('계통마다 어그로 폭이 다르게 잡혀 있다', () {
+      final drone = MonsterCodex.ofBuild(MonsterBuild.drone).first.stats;
+      final walker = MonsterCodex.ofBuild(MonsterBuild.walker).first.stats;
+      // 비행 정찰 계통이 보행 계통보다 예민하다.
+      expect(drone.aggroMinMeters, greaterThan(walker.aggroMaxMeters));
+    });
+  });
+
+  group('사망 후 안전지대 재가동', () {
+    test('재가동 지점은 언제나 안전지대 안이고 통행 가능하다', () {
+      final map = LevelMap.generate();
+      for (var seed = 0; seed < 60; seed++) {
+        final point = map.respawnPoint(math.Random(seed));
+        expect(map.safeZone.containsPoint(point), isTrue);
+        expect(map.isWalkableAt(point.x, point.y), isTrue);
+        // 경계에 딱 붙어 되살아나면 한 발짝에 밖으로 나가 버린다.
+        expect(map.safeZone.signedDistance(point.x, point.y), lessThan(-1.0));
+      }
+    });
+
+    test('재가동하면 쓰러지기 전의 클릭 이동 목표를 버린다', () {
+      // 목표가 남으면 아무도 조작하지 않았는데 혼자 안전지대 밖으로 걸어간다.
+      final player = Player(grid: Vector2(880, 880));
+      player.moveTo(Vector2(900, 910));
+      expect(player.moveTarget, isNotNull);
+
+      player.respawnAt(Vector2(500, 500));
+
+      expect(player.moveTarget, isNull);
+      expect(player.grid, Vector2(500, 500));
+      expect(player.hp, player.maxHp);
+    });
+
+    test('텔레포트도 떠나온 곳의 클릭 목표를 버린다', () {
+      final player = Player(grid: Vector2(880, 880));
+      player.moveTo(Vector2(900, 910));
+
+      player.teleportTo(Vector2(500, 500));
+
+      expect(player.moveTarget, isNull);
+      expect(player.grid, Vector2(500, 500));
     });
   });
 

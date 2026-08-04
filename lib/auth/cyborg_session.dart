@@ -4,6 +4,7 @@ import 'package:spacetimedb_sdk/spacetimedb_sdk.dart';
 import '../spacetime/cyborg_connection.dart';
 import '../spacetime/generated/account.dart';
 import '../spacetime/generated/client.dart';
+import '../spacetime/reducer_error.dart';
 import '../spacetime/generated/player_character.dart' as gen;
 import '../spacetime/generated/session.dart' as gen;
 
@@ -27,7 +28,24 @@ enum ConnectionPhase {
 /// 서버가 거절했을 때 화면과 서버가 어긋나며, 그 어긋남은 "로그인한 줄 알았는데
 /// 아니었다" 같은 형태로 나타나 디버깅이 어렵다.
 class CyborgSession extends ChangeNotifier {
+  /// [tokenStore] 를 넘기지 않으면 기기 저장소([PrefsTokenStore])를 쓴다.
+  ///
+  /// 테스트가 저장소를 갈아끼워 "토큰이 남아 있는 재시작" 과 "토큰이 없는 첫
+  /// 실행" 을 모두 재현할 수 있도록 열어 두었다. 이 갈래가 곧 로그인 유지
+  /// 동작이므로 실제로 검증할 수 있어야 한다.
+  CyborgSession({AuthTokenStore? tokenStore})
+    : _tokenStore = tokenStore ?? PrefsTokenStore();
+
+  final AuthTokenStore _tokenStore;
+
   SpacetimeDbClient? _client;
+
+  /// 연결된 클라이언트. 붙기 전이거나 실패했으면 null.
+  ///
+  /// 계정·캐릭터는 이 클래스의 메서드로만 다루지만, 게임 안에서 쓰는 연동
+  /// (진행도 보고, 리더보드 열람)은 자기 화면을 직접 그리므로 클라이언트가
+  /// 필요하다. 그 연결은 게임 껍데기(`GameScreen`)가 맡는다.
+  SpacetimeDbClient? get client => _client;
 
   ConnectionPhase _phase = ConnectionPhase.connecting;
   ConnectionPhase get phase => _phase;
@@ -82,12 +100,13 @@ class CyborgSession extends ChangeNotifier {
         host: kCyborgHost,
         database: kCyborgDatabase,
         ssl: kCyborgSsl,
-        authStorage: PrefsTokenStore(),
+        authStorage: _tokenStore,
       );
 
-      // view 는 구독 질의 없이 서버가 알아서 밀어 준다. 테이블은 모두 비공개라
-      // 구독할 것도 없다.
-      await client.connect();
+      // view 도 테이블과 똑같이 **구독해야** 행이 온다. 구독하지 않으면 reducer
+      // 는 성공하는데 화면은 영원히 로그아웃 상태로 남는다(실측으로 확인했다).
+      // 실제 테이블은 모두 비공개라 구독할 것이 없고, 구독 대상은 이 세 view 뿐이다.
+      await client.connect(initialSubscriptions: kCyborgViewSubscriptions);
 
       _client = client;
       _watchViews(client);
@@ -195,9 +214,9 @@ class CyborgSession extends ChangeNotifier {
       await action();
       return true;
     } on SpacetimeDbReducerException catch (e) {
-      // 서버가 `Err(...)` 로 돌려준 문장이 그대로 들어 있다. 모듈이 한국어로
-      // 쓰고 있으므로 사용자에게 그대로 보여준다.
-      _error = _cleanServerMessage(e.message);
+      // 서버 모듈이 한국어 문장을 돌려주므로 사용자에게 그대로 보여준다.
+      // 다만 전송 과정에서 붙는 찌꺼기는 벗겨야 한다([cleanReducerError]).
+      _error = cleanReducerError(e.message);
       return false;
     } on Object catch (e) {
       _error = '요청을 처리하지 못했다: $e';
@@ -208,17 +227,15 @@ class CyborgSession extends ChangeNotifier {
     }
   }
 
-  /// 서버 에러 문자열에서 사람이 읽을 부분만 남긴다.
+  /// 표시 중인 오류를 지운다.
   ///
-  /// 호스트가 reducer 이름·트랜잭션 정보를 앞에 붙이는 경우가 있어, 우리 모듈이
-  /// 만든 마지막 줄만 취한다.
-  String _cleanServerMessage(String raw) {
-    final lines = raw
-        .split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.isNotEmpty)
-        .toList();
-    return lines.isEmpty ? '요청이 거절되었다.' : lines.last;
+  /// 화면이 모드를 바꿀 때(로그인 ↔ 가입, 목록 ↔ 만들기) 부른다. 지우지 않으면
+  /// 직전 화면에서 받은 거절 사유가 새 화면에 그대로 남아, 아직 아무것도 하지
+  /// 않았는데 실패한 것처럼 보인다.
+  void clearError() {
+    if (_error == null) return;
+    _error = null;
+    notifyListeners();
   }
 
   @override

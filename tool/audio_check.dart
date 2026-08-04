@@ -49,8 +49,15 @@ class _AudioCheckAppState extends State<_AudioCheckApp> {
       return;
     }
 
-    await GameAudio.startAmbience();
-    _write('앰비언스: ${GameAudio.isAmbiencePlaying ? "재생 중" : "실패"}');
+    // 배경음악 트랙을 차례로 확인한다.
+    for (final track in MusicTrack.values) {
+      await GameAudio.playMusic(track);
+      _write('♪ ${track.name}: '
+          '${GameAudio.currentTrack == track ? "재생 중" : "실패"}');
+      await Future<void>.delayed(const Duration(seconds: 4));
+    }
+    await GameAudio.playMusic(GameAudio.defaultTrack);
+    _write('기본 트랙(${GameAudio.defaultTrack.name})으로 복귀');
 
     for (final sfx in Sfx.values) {
       GameAudio.play(sfx);

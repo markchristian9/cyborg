@@ -2,8 +2,13 @@ import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 
 import 'auth/cyborg_gate.dart';
+import 'auth/cyborg_kind.dart';
+import 'auth/cyborg_session.dart';
 import 'game/action_rpg_game.dart';
+import 'game/net/spacetime_game_sync.dart';
 import 'game/palette.dart';
+import 'spacetime/generated/player_character.dart';
+import 'spacetime/spacetime_leaderboard.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,14 +31,22 @@ class CyborgApp extends StatelessWidget {
           brightness: Brightness.light,
         ),
       ),
-      home: const GameScreen(),
+      // 게임 화면 앞에 계정·캐릭터 관문을 둔다. 관문을 통과해야
+      // [GameScreen]이 뜬다.
+      home: const CyborgGate(),
     );
   }
 }
 
 /// [ActionRpgGame]을 띄우고 메뉴 오버레이를 붙이는 화면.
 class GameScreen extends StatefulWidget {
-  const GameScreen({super.key});
+  const GameScreen({super.key, required this.session, this.character});
+
+  /// 계정·캐릭터 상태. 월드 메뉴의 로그아웃이 이 세션을 접는다.
+  final CyborgSession session;
+
+  /// 출격한 캐릭터. 캐릭터 화면에 이름을 보여주는 데 쓴다.
+  final PlayerCharacter? character;
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -42,10 +55,68 @@ class GameScreen extends StatefulWidget {
 class _GameScreenState extends State<GameScreen> {
   /// 게임 인스턴스는 화면이 사는 동안 한 번만 만든다. build마다 새로
   /// 만들면 월드가 통째로 다시 생성된다.
+  late final ActionRpgGame _game = _createGame();
+
+  /// 게임과 서버를 잇는다.
   ///
-  /// SpacetimeDB 연동은 [ActionRpgGame.sync]로 주입한다. null이면
-  /// 완전 오프라인으로 동작한다.
-  late final ActionRpgGame _game = ActionRpgGame();
+  /// 연결이 없으면 두 연동 모두 빼고 만든다. 게임은 [ActionRpgGame.sync]와
+  /// [ActionRpgGame.leaderboard]가 없을 때를 전제로 설계되어 있으므로 오프라인
+  /// 으로 그대로 돌아가고, 기록 전송과 순위 열람만 빠진다.
+  ActionRpgGame _createGame() {
+    final client = widget.session.client;
+    final character = widget.character;
+
+    // 서버에 저장된 누적 경험치로 출격한다. 이걸 넘기지 않으면 몸체는 1 레벨로
+    // 태어나고, 서버는 이미 더 많은 누적을 알고 있어 뒤로 가는 보고를 전부
+    // 버린다 — 예전 기록을 넘어설 때까지 순위가 멈춘다.
+    //
+    // 레벨을 따로 넘기지 않는 이유는 누적 하나로 정해지기 때문이다. 둘을 함께
+    // 넘기면 서로 어긋난 상태를 만들 수 있다.
+    final startTotalXp = character?.totalXp ?? 0;
+
+    // 선택 화면에서 고른 몸을 그대로 들고 들어간다. 이걸 넘기지 않으면
+    // 여성형을 골라도 월드에서는 기본 남성형으로 태어난다.
+    final kind = character == null
+        ? CyborgKind.male
+        : CyborgKind.fromId(character.kind);
+
+    return ActionRpgGame(
+      onLogout: _confirmLogout,
+      sync: client == null
+          ? null
+          : SpacetimeGameSync(client, startTotalXp: startTotalXp),
+      leaderboard: client == null ? null : SpacetimeLeaderboard(client),
+      startTotalXp: startTotalXp,
+      design: kind.design,
+    )..characterName = character?.name.toUpperCase() ?? 'UNIT-01';
+  }
+
+  /// 월드 메뉴에서 로그아웃을 골랐을 때. 되돌릴 수 없으니 한 번 되묻는다.
+  Future<void> _confirmLogout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: GamePalette.hudBackground,
+        title: const Text('로그아웃'),
+        content: const Text('접속을 끊고 로그인 화면으로 돌아갑니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('로그아웃'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    // 화면 전환은 하지 않는다. 세션이 끊기면 [CyborgGate]가 로그인 화면으로
+    // 되돌린다. 여기서 Navigator를 건드리면 두 곳이 같은 결정을 내리게 된다.
+    await widget.session.logout();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -123,6 +194,7 @@ class _ControlsCard extends StatelessWidget {
 
   static const List<(String, String)> _rows = [
     ('이동', 'WASD  ·  방향키'),
+    ('클릭 이동', '빈 땅을 클릭 / 끌기'),
     ('근접 공격', 'Space  ·  J'),
     ('플라즈마 사격', 'K  ·  F'),
     ('대시', 'Shift  ·  L'),

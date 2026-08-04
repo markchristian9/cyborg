@@ -10,6 +10,7 @@ class LeaderboardEntry {
     required this.kind,
     required this.level,
     required this.xp,
+    required this.totalXp,
   });
 
   factory LeaderboardEntry.fromJson(Map<String, dynamic> json) {
@@ -19,7 +20,8 @@ class LeaderboardEntry {
       name: json['name'] ?? '',
       kind: json['kind'] ?? '',
       level: json['level'] ?? 0,
-      xp: Int64(json['xp'] ?? 0),
+      xp: json['xp'] ?? 0,
+      totalXp: json['totalXp'] ?? 0,
     );
   }
 
@@ -33,7 +35,9 @@ class LeaderboardEntry {
 
   final int level;
 
-  final Int64 xp;
+  final int xp;
+
+  final int totalXp;
 
   void encodeBsatn(BsatnEncoder encoder) {
     encoder.writeU32(rank);
@@ -41,7 +45,8 @@ class LeaderboardEntry {
     encoder.writeString(name);
     encoder.writeString(kind);
     encoder.writeU32(level);
-    encoder.writeU64(xp);
+    encoder.writeU32(xp);
+    encoder.writeU32(totalXp);
   }
 
   static LeaderboardEntry decodeBsatn(BsatnDecoder decoder) {
@@ -51,7 +56,8 @@ class LeaderboardEntry {
       name: decoder.readString(),
       kind: decoder.readString(),
       level: decoder.readU32(),
-      xp: decoder.readU64(),
+      xp: decoder.readU32(),
+      totalXp: decoder.readU32(),
     );
   }
 
@@ -62,7 +68,8 @@ class LeaderboardEntry {
       'name': name,
       'kind': kind,
       'level': level,
-      'xp': xp.toInt(),
+      'xp': xp,
+      'totalXp': totalXp,
     };
   }
 
@@ -75,17 +82,18 @@ class LeaderboardEntry {
             name == other.name &&
             kind == other.kind &&
             level == other.level &&
-            xp == other.xp;
+            xp == other.xp &&
+            totalXp == other.totalXp;
   }
 
   @override
   int get hashCode {
-    return Object.hashAll([rank, characterId, name, kind, level, xp]);
+    return Object.hashAll([rank, characterId, name, kind, level, xp, totalXp]);
   }
 
   @override
   String toString() {
-    return 'LeaderboardEntry(rank: $rank, characterId: $characterId, name: $name, kind: $kind, level: $level, xp: $xp)';
+    return 'LeaderboardEntry(rank: $rank, characterId: $characterId, name: $name, kind: $kind, level: $level, xp: $xp, totalXp: $totalXp)';
   }
 
   LeaderboardEntry copyWith({
@@ -94,7 +102,8 @@ class LeaderboardEntry {
     String? name,
     String? kind,
     int? level,
-    Int64? xp,
+    int? xp,
+    int? totalXp,
   }) {
     return LeaderboardEntry(
       rank: rank ?? this.rank,
@@ -103,6 +112,7 @@ class LeaderboardEntry {
       kind: kind ?? this.kind,
       level: level ?? this.level,
       xp: xp ?? this.xp,
+      totalXp: totalXp ?? this.totalXp,
     );
   }
 }

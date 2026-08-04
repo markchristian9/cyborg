@@ -9,174 +9,56 @@ import '../fx/explosion.dart';
 import '../iso.dart';
 import '../palette.dart';
 import '../systems/level_system.dart';
+import '../systems/monster_codex.dart';
 import '../systems/monster_population.dart';
 import 'iso_entity.dart';
 import 'projectile.dart';
 
-/// AI 로봇 유닛의 종류.
-enum EnemyKind {
-  /// 정찰 드론. 빠르고 약하며 공중에 떠 있다.
-  scout,
-
-  /// 순찰 보행 로봇. 근접 강타를 사용한다.
-  sentry,
-
-  /// 중장갑 메크. 느리지만 원거리 플라즈마를 연사한다.
-  heavy,
-
-  /// 구역 지휘 유닛. 웨이브 보스.
-  commander,
-}
-
 /// AI의 행동 단계.
 enum EnemyPhase { idle, chase, telegraph, strike, recover, dead }
-
-/// 몬스터 어그로 범위의 하한(미터).
-const double kAggroMinMeters = 1.0;
-
-/// 몬스터 어그로 범위의 상한(미터).
-const double kAggroMaxMeters = 5.0;
 
 /// 추격을 포기하기까지 어그로 범위에 더해 주는 여유(미터).
 ///
 /// 어그로 경계에서 추격/배회 상태가 매 프레임 뒤집히는 것을 막는다.
 const double kAggroReleaseMargin = 2.5;
 
-/// 종류별 기본 스탯 표.
-class EnemyStats {
-  const EnemyStats({
-    required this.maxHp,
-    required this.speed,
-    required this.damage,
-    required this.attackRange,
-    required this.aggroMinMeters,
-    required this.aggroMaxMeters,
-    required this.telegraphTime,
-    required this.strikeTime,
-    required this.recoverTime,
-    required this.xp,
-    required this.bodyRadius,
-    required this.hoverHeight,
-    required this.ranged,
-    this.scale = 1.0,
-  });
-
-  final double maxHp;
-  final double speed;
-  final double damage;
-  final double attackRange;
-
-  /// 개체별 어그로 범위를 뽑을 구간의 하한(미터).
-  ///
-  /// 종류마다 감지 성능이 다르지만, 모든 값은
-  /// [kAggroMinMeters]~[kAggroMaxMeters] 안에 들어간다.
-  final double aggroMinMeters;
-
-  /// 개체별 어그로 범위를 뽑을 구간의 상한(미터).
-  final double aggroMaxMeters;
-
-  final double telegraphTime;
-  final double strikeTime;
-  final double recoverTime;
-  final int xp;
-  final double bodyRadius;
-  final double hoverHeight;
-  final bool ranged;
-  final double scale;
-
-  static const Map<EnemyKind, EnemyStats> table = {
-    EnemyKind.scout: EnemyStats(
-      maxHp: 34,
-      speed: 3.1,
-      damage: 8,
-      attackRange: 1.0,
-      // 센서 특화 정찰기. 가장 멀리서 반응한다.
-      aggroMinMeters: 4.0,
-      aggroMaxMeters: 5.0,
-      telegraphTime: 0.32,
-      strikeTime: 0.12,
-      recoverTime: 0.5,
-      xp: 12,
-      bodyRadius: 0.28,
-      hoverHeight: 0.85,
-      ranged: false,
-    ),
-    EnemyKind.sentry: EnemyStats(
-      maxHp: 70,
-      speed: 2.2,
-      damage: 15,
-      attackRange: 1.25,
-      // 둔한 순찰기. 코앞까지 와야 알아챈다.
-      aggroMinMeters: 1.0,
-      aggroMaxMeters: 2.5,
-      telegraphTime: 0.5,
-      strikeTime: 0.16,
-      recoverTime: 0.7,
-      xp: 22,
-      bodyRadius: 0.34,
-      hoverHeight: 0,
-      ranged: false,
-    ),
-    EnemyKind.heavy: EnemyStats(
-      maxHp: 150,
-      speed: 1.35,
-      damage: 14,
-      attackRange: 7.5,
-      // 사거리는 길지만 탐지는 중간이다.
-      aggroMinMeters: 2.5,
-      aggroMaxMeters: 4.0,
-      telegraphTime: 0.7,
-      strikeTime: 0.45,
-      recoverTime: 1.1,
-      xp: 45,
-      bodyRadius: 0.46,
-      hoverHeight: 0,
-      ranged: true,
-      scale: 1.25,
-    ),
-    EnemyKind.commander: EnemyStats(
-      maxHp: 620,
-      speed: 1.6,
-      damage: 22,
-      attackRange: 9.0,
-      // 지휘 유닛은 상한까지 예민하다.
-      aggroMinMeters: 4.5,
-      aggroMaxMeters: 5.0,
-      telegraphTime: 0.75,
-      strikeTime: 0.6,
-      recoverTime: 1.0,
-      xp: 260,
-      bodyRadius: 0.72,
-      hoverHeight: 0,
-      ranged: true,
-      scale: 1.9,
-    ),
-  };
-}
-
 /// AI 로봇 적 유닛.
 class Enemy extends IsoEntity with Damageable {
   Enemy({
-    required this.kind,
+    required this.species,
     required Vector2 grid,
     double hpMultiplier = 1.0,
-    double damageMultiplier = 1.0,
-  })  : stats = EnemyStats.table[kind]!,
+  })  : stats = species.stats,
         _hpScale = hpMultiplier,
-        _damageScale = damageMultiplier,
         super(
           grid: grid,
-          bodyRadius: EnemyStats.table[kind]!.bodyRadius,
-          z: EnemyStats.table[kind]!.hoverHeight,
+          bodyRadius: species.stats.bodyRadius,
+          z: species.stats.hoverHeight,
         ) {
     _maxHp = stats.maxHp * _hpScale;
     _hp = _maxHp;
   }
 
-  final EnemyKind kind;
-  final EnemyStats stats;
+  /// 이 개체가 속한 종. 레벨·이름·도색·수치가 모두 여기서 온다.
+  final MonsterSpecies species;
+
+  final MonsterStats stats;
+
+  /// 개체별 체력 편차. 같은 종이라도 조금씩 질기다.
+  ///
+  /// 피해 쪽에는 이런 편차를 두지 않는다 — "레벨 N 몬스터는 정확히 N" 이라는
+  /// 규격은 배율이 하나라도 끼면 깨지고, 화면의 피해 숫자는 반올림되어
+  /// 표시되므로 어긋나도 눈에 띄지 않는다.
   final double _hpScale;
-  final double _damageScale;
+
+  /// 실루엣을 고르기 위한 골격 계통.
+  MonsterBuild get build => species.build;
+
+  /// 이 개체의 레벨(1~200).
+  int get level => species.level;
+
+  /// 도색. 종마다 다르다.
+  MonsterPalette get palette => species.palette;
 
   /// 월드에 상주하는 개체라면 그 장부([MonsterSeed]).
   ///
@@ -232,7 +114,7 @@ class Enemy extends IsoEntity with Damageable {
     return player.isAlive && !game.map.safeZone.containsPoint(player.grid);
   }
 
-  bool get isBoss => kind == EnemyKind.commander;
+  bool get isBoss => species.isSovereign;
 
   @override
   void onMount() {
@@ -333,9 +215,9 @@ class Enemy extends IsoEntity with Damageable {
     }
   }
 
-  int get _burstCount => switch (kind) {
-        EnemyKind.heavy => 3,
-        EnemyKind.commander => 5,
+  int get _burstCount => switch (build) {
+        MonsterBuild.siege => 3,
+        MonsterBuild.sovereign => 5,
         _ => 1,
       };
 
@@ -419,7 +301,7 @@ class Enemy extends IsoEntity with Damageable {
     final knock = toPlayer.length2 > 0.001
         ? toPlayer.normalized() * 3.2
         : facing.clone() * 3.2;
-    player.applyDamage(stats.damage * _damageScale, knockback: knock);
+    player.applyDamage(stats.damage, knockback: knock);
   }
 
   void _fire() {
@@ -442,7 +324,7 @@ class Enemy extends IsoEntity with Damageable {
         grid: grid + rotated * (bodyRadius + 0.25),
         direction: rotated,
         speed: isBoss ? 7.0 : 6.2,
-        damage: stats.damage * _damageScale,
+        damage: stats.damage,
         owner: ProjectileOwner.enemy,
         z: 0.7 * stats.scale,
         homing: isBoss ? 0.9 : 0,
@@ -461,11 +343,11 @@ class Enemy extends IsoEntity with Damageable {
 
     // 무거운 유닛일수록 넉백에 강하다.
     if (knockback != null) {
-      final resistance = switch (kind) {
-        EnemyKind.scout => 1.4,
-        EnemyKind.sentry => 1.0,
-        EnemyKind.heavy => 0.45,
-        EnemyKind.commander => 0.12,
+      final resistance = switch (build) {
+        MonsterBuild.drone => 1.4,
+        MonsterBuild.walker => 1.0,
+        MonsterBuild.siege => 0.45,
+        MonsterBuild.sovereign => 0.12,
       };
       _knockback.add(knockback * resistance);
     }
@@ -519,18 +401,24 @@ class Enemy extends IsoEntity with Damageable {
     final s = stats.scale;
     renderShadow(canvas, 20 * s, radiusY: 10 * s);
 
+    // 등급 문양은 그림자 위, 본체 아래에 깔린다.
+    canvas.save();
+    canvas.scale(s);
+    _drawTierCrest(canvas);
+    canvas.restore();
+
     canvas.save();
     canvas.scale(s);
     if (!facesRight(facing)) canvas.scale(-1, 1);
 
-    switch (kind) {
-      case EnemyKind.scout:
+    switch (build) {
+      case MonsterBuild.drone:
         _renderScout(canvas);
-      case EnemyKind.sentry:
+      case MonsterBuild.walker:
         _renderSentry(canvas);
-      case EnemyKind.heavy:
+      case MonsterBuild.siege:
         _renderHeavy(canvas);
-      case EnemyKind.commander:
+      case MonsterBuild.sovereign:
         _renderCommander(canvas);
     }
     canvas.restore();
@@ -538,44 +426,84 @@ class Enemy extends IsoEntity with Damageable {
     if (_hitFlash > 0) _renderHitFlash(canvas);
     if (_healthBarTimer > 0 || isBoss) _renderHealthBar(canvas);
     if (phase == EnemyPhase.telegraph) _renderTelegraph(canvas);
+    if (_showNameTag) _renderNameTag(canvas);
   }
+
+  /// 이름표를 띄울지 여부.
+  ///
+  /// 지휘급은 언제나, 나머지는 가까이 있거나 방금 맞았을 때만 보여 준다.
+  /// 200종이 한꺼번에 이름을 달고 있으면 화면이 글자로 뒤덮인다.
+  bool get _showNameTag {
+    if (isBoss || _healthBarTimer > 0) return true;
+    return (grid - game.player.grid).length2 <= _nameTagRangeSquared;
+  }
+
+  static const double _nameTagRangeSquared = 7.0 * 7.0;
 
   Paint get _shell => Paint()
     ..color = Color.lerp(
-      GamePalette.robotShell,
+      palette.shell,
       Colors.white,
       _hitFlash * 0.7,
     )!;
 
   Paint get _shellLight => Paint()
     ..color = Color.lerp(
-      GamePalette.robotShellLight,
+      palette.shellLight,
       Colors.white,
       _hitFlash * 0.7,
     )!;
 
   Paint get _shellDark => Paint()
     ..color = Color.lerp(
-      GamePalette.robotShellDark,
+      palette.shellDark,
       Colors.white,
       _hitFlash * 0.5,
     )!;
 
-  /// 붉은 센서 아이(발광).
+  /// 센서 아이(발광). 종의 눈 개수만큼 가로로 늘어놓는다.
   void _drawEye(Canvas canvas, Offset center, double radius) {
-    canvas.drawCircle(
-      center,
-      radius * 2.4,
-      Paint()
-        ..color = GamePalette.robotEye.withValues(alpha: 0.5)
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, radius * 2),
-    );
-    canvas.drawCircle(center, radius, Paint()..color = GamePalette.robotEye);
-    canvas.drawCircle(
-      center,
-      radius * 0.45,
-      Paint()..color = GamePalette.robotEyeGlow,
-    );
+    final count = species.eyeCount;
+    // 눈이 많아지면 하나하나는 작아져 머리 폭을 넘지 않는다.
+    final r = radius / (1 + (count - 1) * 0.3);
+    final gap = r * 2.4;
+    final startX = center.dx - gap * (count - 1) / 2;
+
+    for (var i = 0; i < count; i++) {
+      final eye = Offset(startX + gap * i, center.dy);
+      canvas.drawCircle(
+        eye,
+        r * 2.4,
+        Paint()
+          ..color = palette.eye.withValues(alpha: 0.5)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, r * 2),
+      );
+      canvas.drawCircle(eye, r, Paint()..color = palette.eye);
+      canvas.drawCircle(eye, r * 0.45, Paint()..color = palette.eyeGlow);
+    }
+  }
+
+  /// 발밑에 깔리는 등급 문양. 상위 등급일수록 고리가 겹겹이 늘어난다.
+  void _drawTierCrest(Canvas canvas) {
+    final count = species.crestCount;
+    if (count == 0) return;
+
+    final pulse = 0.75 + math.sin(_animTime * 2.2 + _phaseOffset) * 0.25;
+    for (var i = 0; i < count; i++) {
+      final radiusX = 26.0 + i * 7;
+      canvas.drawOval(
+        Rect.fromCenter(
+          center: Offset.zero,
+          width: radiusX * 2,
+          height: radiusX,
+        ),
+        Paint()
+          // 밝은 바닥 위라 옅게 깔면 아예 보이지 않는다.
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.8
+          ..color = palette.energy.withValues(alpha: 0.55 * pulse),
+      );
+    }
   }
 
   void _renderScout(Canvas canvas) {
@@ -599,7 +527,7 @@ class Enemy extends IsoEntity with Damageable {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 3
-        ..color = GamePalette.robotEnergy.withValues(alpha: 0.75)
+        ..color = palette.energy.withValues(alpha: 0.75)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
     );
 
@@ -632,14 +560,14 @@ class Enemy extends IsoEntity with Damageable {
       Offset(-19, 5),
       3 * thrust + 1,
       Paint()
-        ..color = GamePalette.robotEnergy.withValues(alpha: 0.8)
+        ..color = palette.energy.withValues(alpha: 0.8)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
     );
     canvas.drawCircle(
       Offset(19, 5),
       3 * thrust + 1,
       Paint()
-        ..color = GamePalette.robotEnergy.withValues(alpha: 0.8)
+        ..color = palette.energy.withValues(alpha: 0.8)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
     );
 
@@ -698,7 +626,7 @@ class Enemy extends IsoEntity with Damageable {
     // 흉부 발광 코어
     canvas.drawRect(
       Rect.fromLTWH(-4, baseY - 54, 14, 4),
-      Paint()..color = GamePalette.robotEnergy.withValues(alpha: 0.9),
+      Paint()..color = palette.energy.withValues(alpha: 0.9),
     );
 
     // 팔(공격 모션에 따라 들어올림)
@@ -749,7 +677,7 @@ class Enemy extends IsoEntity with Damageable {
       Offset(-6, baseY - 82),
       Offset(-8, baseY - 92),
       Paint()
-        ..color = GamePalette.robotShellDark
+        ..color = palette.shellDark
         ..strokeWidth = 2,
     );
   }
@@ -818,7 +746,7 @@ class Enemy extends IsoEntity with Damageable {
         Offset(50, baseY - 76),
         4 + charge * 6,
         Paint()
-          ..color = GamePalette.robotEnergy.withValues(alpha: 0.85)
+          ..color = palette.energy.withValues(alpha: 0.85)
           ..maskFilter = MaskFilter.blur(BlurStyle.normal, 4 + charge * 6),
       );
     }
@@ -844,7 +772,7 @@ class Enemy extends IsoEntity with Damageable {
     // 배기구 발광
     canvas.drawRect(
       Rect.fromLTWH(-22, baseY - 56, 6, 12),
-      Paint()..color = GamePalette.robotEnergy.withValues(alpha: 0.6),
+      Paint()..color = palette.energy.withValues(alpha: 0.6),
     );
   }
 
@@ -859,13 +787,13 @@ class Enemy extends IsoEntity with Damageable {
       Offset(-4, -110 + float),
       13,
       Paint()
-        ..color = GamePalette.robotEye.withValues(alpha: 0.55)
+        ..color = palette.eye.withValues(alpha: 0.55)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12),
     );
     canvas.drawCircle(
       Offset(-4, -110 + float),
       7,
-      Paint()..color = GamePalette.robotEyeGlow,
+      Paint()..color = palette.eyeGlow,
     );
 
     // 위성처럼 도는 방어 드론
@@ -882,7 +810,7 @@ class Enemy extends IsoEntity with Damageable {
       canvas.drawCircle(
         orbit,
         2.2,
-        Paint()..color = GamePalette.robotEye,
+        Paint()..color = palette.eye,
       );
     }
 
@@ -893,6 +821,62 @@ class Enemy extends IsoEntity with Damageable {
       ..lineTo(-2, -98)
       ..close();
     canvas.drawPath(crown, _shellLight);
+  }
+
+  /// 머리 위 명판. `Lv.42 사냥개 MK-III` 처럼 레벨과 종 이름을 보여 준다.
+  ///
+  /// 글자 색은 플레이어와의 레벨 차이(위협도)를 나타내므로,
+  /// 플레이어가 성장하면 명판을 다시 만든다.
+  void _renderNameTag(Canvas canvas) {
+    final playerLevel = game.player.level;
+    var painter = _nameTagPainter;
+    if (painter == null || _nameTagForLevel != playerLevel) {
+      painter = TextPainter(
+        text: TextSpan(
+          text: 'Lv.${species.level}  ${species.name}',
+          style: TextStyle(
+            color: _threatColor(stats.damage, game.player.maxHp),
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            height: 1,
+            // 밝은 바닥 위에서도 글자가 뜨도록 흰 테두리를 깐다.
+            shadows: const [
+              Shadow(color: Colors.white, blurRadius: 4),
+              Shadow(color: Colors.white, blurRadius: 8),
+            ],
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      _nameTagPainter = painter;
+      _nameTagForLevel = playerLevel;
+    }
+
+    // 체력바보다 한 줄 더 위에 놓는다.
+    final top = (isBoss ? -150.0 : -108.0 * stats.scale) - 14;
+    painter.paint(canvas, Offset(-painter.width / 2, top));
+  }
+
+  TextPainter? _nameTagPainter;
+  int _nameTagForLevel = -1;
+
+  /// 레벨 차이를 색으로 알린다. 붉을수록 위험한 상대다.
+  ///
+  /// 무대가 흰빛 데이터 공간이라 글자는 어두워야 읽힌다.
+  /// 밝은 글자는 바닥에 묻혀 명판 자체가 보이지 않는다.
+  /// "몇 대 맞으면 쓰러지는가" 로 위협도를 나눈다.
+  ///
+  /// 몬스터의 피해가 곧 그 몬스터의 레벨이고 플레이어의 최대 체력을 알고
+  /// 있으므로, 레벨 차보다 이쪽이 훨씬 정직한 지표다. 레벨 차로 재면
+  /// 플레이어 상한이 30인데 몬스터는 200까지 있어 외곽에서는 무엇을 만나든
+  /// 늘 같은 색이 된다.
+  static Color _threatColor(double damage, double playerMaxHp) {
+    final hits = playerMaxHp / math.max(1.0, damage);
+    if (hits >= 2000) return GamePalette.textDim; // 사실상 무해
+    if (hits >= 600) return GamePalette.textPrimary; // 보통
+    if (hits >= 200) return const Color(0xFF9A5B00); // 주의
+    if (hits >= 80) return const Color(0xFFC2341B); // 위험
+    return GamePalette.robotEye; // 치명
   }
 
   void _renderHitFlash(Canvas canvas) {
@@ -924,8 +908,8 @@ class Enemy extends IsoEntity with Damageable {
       ),
       Paint()
         ..color = isBoss
-            ? GamePalette.robotEye
-            : Color.lerp(GamePalette.hpFillLow, GamePalette.robotEnergy, ratio)!,
+            ? palette.eye
+            : Color.lerp(GamePalette.hpFillLow, palette.energy, ratio)!,
     );
   }
 
@@ -944,7 +928,7 @@ class Enemy extends IsoEntity with Damageable {
         Offset(screenDir.x * length, screenDir.y * length - 40 * stats.scale),
         Paint()
           ..strokeWidth = 1.6
-          ..color = GamePalette.robotEye.withValues(alpha: alpha * 0.8),
+          ..color = palette.eye.withValues(alpha: alpha * 0.8),
       );
     } else {
       // 근접 범위 원(아이소 타원)
@@ -958,7 +942,7 @@ class Enemy extends IsoEntity with Damageable {
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2.5
-          ..color = GamePalette.robotEye.withValues(alpha: alpha),
+          ..color = palette.eye.withValues(alpha: alpha),
       );
     }
   }

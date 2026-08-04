@@ -12,6 +12,7 @@ class PlayerCharacter {
     required this.xp,
     required this.createdAt,
     required this.lastPlayedAt,
+    required this.totalXp,
   });
 
   factory PlayerCharacter.fromJson(Map<String, dynamic> json) {
@@ -21,9 +22,10 @@ class PlayerCharacter {
       name: json['name'] ?? '',
       kind: json['kind'] ?? '',
       level: json['level'] ?? 0,
-      xp: Int64(json['xp'] ?? 0),
+      xp: json['xp'] ?? 0,
       createdAt: Int64(json['createdAt'] ?? 0),
       lastPlayedAt: Int64(json['lastPlayedAt'] ?? 0),
+      totalXp: json['totalXp'] ?? 0,
     );
   }
 
@@ -37,11 +39,13 @@ class PlayerCharacter {
 
   final int level;
 
-  final Int64 xp;
+  final int xp;
 
   final Int64 createdAt;
 
   final Int64 lastPlayedAt;
+
+  final int totalXp;
 
   void encodeBsatn(BsatnEncoder encoder) {
     encoder.writeU64(id);
@@ -49,9 +53,10 @@ class PlayerCharacter {
     encoder.writeString(name);
     encoder.writeString(kind);
     encoder.writeU32(level);
-    encoder.writeU64(xp);
+    encoder.writeU32(xp);
     encoder.writeI64(createdAt);
     encoder.writeI64(lastPlayedAt);
+    encoder.writeU32(totalXp);
   }
 
   static PlayerCharacter decodeBsatn(BsatnDecoder decoder) {
@@ -61,9 +66,10 @@ class PlayerCharacter {
       name: decoder.readString(),
       kind: decoder.readString(),
       level: decoder.readU32(),
-      xp: decoder.readU64(),
+      xp: decoder.readU32(),
       createdAt: decoder.readI64(),
       lastPlayedAt: decoder.readI64(),
+      totalXp: decoder.readU32(),
     );
   }
 
@@ -74,9 +80,10 @@ class PlayerCharacter {
       'name': name,
       'kind': kind,
       'level': level,
-      'xp': xp.toInt(),
+      'xp': xp,
       'createdAt': createdAt.toInt(),
       'lastPlayedAt': lastPlayedAt.toInt(),
+      'totalXp': totalXp,
     };
   }
 
@@ -91,7 +98,8 @@ class PlayerCharacter {
             level == other.level &&
             xp == other.xp &&
             createdAt == other.createdAt &&
-            lastPlayedAt == other.lastPlayedAt;
+            lastPlayedAt == other.lastPlayedAt &&
+            totalXp == other.totalXp;
   }
 
   @override
@@ -105,12 +113,13 @@ class PlayerCharacter {
       xp,
       createdAt,
       lastPlayedAt,
+      totalXp,
     ]);
   }
 
   @override
   String toString() {
-    return 'PlayerCharacter(id: $id, accountId: $accountId, name: $name, kind: $kind, level: $level, xp: $xp, createdAt: $createdAt, lastPlayedAt: $lastPlayedAt)';
+    return 'PlayerCharacter(id: $id, accountId: $accountId, name: $name, kind: $kind, level: $level, xp: $xp, createdAt: $createdAt, lastPlayedAt: $lastPlayedAt, totalXp: $totalXp)';
   }
 
   PlayerCharacter copyWith({
@@ -119,9 +128,10 @@ class PlayerCharacter {
     String? name,
     String? kind,
     int? level,
-    Int64? xp,
+    int? xp,
     Int64? createdAt,
     Int64? lastPlayedAt,
+    int? totalXp,
   }) {
     return PlayerCharacter(
       id: id ?? this.id,
@@ -132,6 +142,7 @@ class PlayerCharacter {
       xp: xp ?? this.xp,
       createdAt: createdAt ?? this.createdAt,
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
+      totalXp: totalXp ?? this.totalXp,
     );
   }
 }

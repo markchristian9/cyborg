@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:actionrpg/game/entities/enemy.dart';
+import 'package:actionrpg/game/systems/monster_codex.dart';
 import 'package:actionrpg/game/entities/pickup.dart';
 import 'package:actionrpg/game/systems/buff.dart';
 import 'package:actionrpg/game/systems/drop_table.dart';
@@ -63,9 +63,9 @@ void main() {
       expect(result.amount, inInclusiveRange(base * 2 * 0.85, base * 2 * 1.15));
     });
 
-    test('모든 적 종류에 드롭 표가 있다', () {
-      for (final kind in EnemyKind.values) {
-        expect(DropTables.forEnemy(kind).entries, isNotEmpty);
+    test('모든 골격 계통에 드롭 표가 있다', () {
+      for (final build in MonsterBuild.values) {
+        expect(DropTables.forEnemy(build).entries, isNotEmpty);
       }
     });
 

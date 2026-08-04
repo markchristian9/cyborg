@@ -118,14 +118,17 @@ class Inventory {
     return use(_slots[index].kind, player);
   }
 
-  /// 회복이 급할 때 쓸 만한 체력 포션을 고른다. 없으면 null.
+  /// 자동·수동 회복에 쓸 체력 포션을 고른다. 없으면 null.
   ///
-  /// 대형이 아깝지 않도록 소형부터 찾는다.
+  /// 소형부터 비워 대형을 위급한 순간까지 아껴 둔다. 전투 강화제는
+  /// 회복이 곁다리라 여기서 고르지 않는다.
   PickupKind? bestHealingPotion() {
     for (final kind in const [
       PickupKind.nanoVial,
       PickupKind.nanoCanister,
-      PickupKind.combatStim,
+      PickupKind.repairCell,
+      PickupKind.regenAmpoule,
+      PickupKind.overhaulKit,
     ]) {
       if (countOf(kind) > 0) return kind;
     }

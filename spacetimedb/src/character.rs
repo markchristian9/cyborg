@@ -70,7 +70,9 @@ pub fn create_character(ctx: &ReducerContext, name: String, kind: String) -> Res
         .collect();
 
     if existing.len() >= MAX_CHARACTERS {
-        return Err(format!("캐릭터는 최대 {MAX_CHARACTERS}개까지 만들 수 있다."));
+        return Err(format!(
+            "캐릭터는 최대 {MAX_CHARACTERS}개까지 만들 수 있다."
+        ));
     }
 
     // 같은 계정 안에서 이름이 겹치면 목록에서 구별할 수 없다.
@@ -83,10 +85,13 @@ pub fn create_character(ctx: &ReducerContext, name: String, kind: String) -> Res
         account_id: session.account_id,
         name,
         kind,
+        // 성장의 진실은 `total_xp` 하나다. `level`·`xp` 는 거기서 나오는
+        // 사본이므로 새 캐릭터에서는 셋이 모두 바닥값이다.
         level: 1,
         xp: 0,
         created_at: ctx.timestamp,
         last_played_at: ctx.timestamp,
+        total_xp: 0,
     });
 
     // 생성과 선택이 한 트랜잭션 안에서 끝나므로 "만들었는데 못 고른" 중간 상태가
@@ -168,7 +173,10 @@ mod tests {
     #[test]
     fn 아는_외형만_통과한다() {
         assert_eq!(normalize_kind("male_cyborg"), Ok("male_cyborg".into()));
-        assert_eq!(normalize_kind(" Female_Cyborg "), Ok("female_cyborg".into()));
+        assert_eq!(
+            normalize_kind(" Female_Cyborg "),
+            Ok("female_cyborg".into())
+        );
         assert!(normalize_kind("robot_overlord").is_err());
         assert!(normalize_kind("").is_err());
     }

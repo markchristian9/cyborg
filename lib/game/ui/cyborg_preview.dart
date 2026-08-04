@@ -55,8 +55,9 @@ class CyborgPreviewPainter extends CustomPainter {
       design: design,
       baseY: -bob,
       swing: swing,
-      back: showBack,
+      yaw: showBack ? math.pi : 0,
       armSwing: walking ? -swing * 6 : 0.0,
+      time: time,
     );
 
     canvas.restore();

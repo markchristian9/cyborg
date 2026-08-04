@@ -6,8 +6,9 @@ import '../game/palette.dart';
 
 /// 계정·캐릭터 화면이 공유하는 배경.
 ///
-/// 게임 안 지형과 같은 색조(어두운 금속 + 청록 회로)를 써서, 로그인 화면에서
-/// 게임으로 넘어갈 때 다른 앱처럼 보이지 않게 한다.
+/// 게임 무대와 같은 톤(눈부시게 밝은 데이터 공간, 청록 격자)을 쓴다. 로그인
+/// 화면에서 게임으로 넘어갈 때 다른 앱처럼 보이지 않게 하려는 것이다 —
+/// 색은 전부 [GamePalette] 에서 가져오므로 무대 톤이 바뀌면 여기도 따라간다.
 class CyborgBackdrop extends StatelessWidget {
   const CyborgBackdrop({super.key, required this.child});
 
@@ -15,34 +16,60 @@ class CyborgBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: RadialGradient(
-          center: Alignment(0, -0.55),
-          radius: 1.1,
-          colors: [Color(0xFF161E2A), GamePalette.voidColor],
+    return Theme(
+      data: _theme,
+      child: Scaffold(
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [GamePalette.skyHigh, GamePalette.skyLow],
+            ),
+          ),
+          child: CustomPaint(
+            painter: _GridPainter(),
+            child: SafeArea(child: child),
+          ),
         ),
-      ),
-      child: CustomPaint(
-        painter: _GridPainter(),
-        child: SafeArea(child: child),
       ),
     );
   }
+
+  /// 이 화면들에 강제하는 테마.
+  ///
+  /// 앱 전체 테마와 무관하게 여기서 못을 박아, Material 기본 위젯(다이얼로그·
+  /// 팝업 메뉴·텍스트 선택 핸들)이 무대 톤에서 벗어나지 않게 한다.
+  static final ThemeData _theme = ThemeData(
+    useMaterial3: true,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: GamePalette.hudBorder,
+      brightness: Brightness.light,
+    ),
+    scaffoldBackgroundColor: GamePalette.skyHigh,
+  );
 }
 
-/// 배경에 깔리는 원근 격자. 발밑에 바닥이 있다는 느낌만 준다.
+/// 배경에 깔리는 원근 격자. 발밑에 데이터 플레이트가 있다는 느낌을 준다.
 class _GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = GamePalette.floorGrid.withValues(alpha: 0.30)
+      ..color = GamePalette.floorGrid.withValues(alpha: 0.55)
       ..strokeWidth = 1;
 
-    // 지평선 아래쪽만 격자를 깐다. 화면 전체에 깔면 글자 읽기를 방해한다.
+    // 지평선 아래쪽에만 격자를 깐다. 화면 전체에 깔면 글자 읽기를 방해한다.
     final horizon = size.height * 0.58;
 
-    for (var i = 0; i <= 14; i++) {
+    canvas.drawLine(
+      Offset(0, horizon),
+      Offset(size.width, horizon),
+      Paint()
+        ..color = GamePalette.horizonGlow.withValues(alpha: 0.7)
+        ..strokeWidth = 1.5,
+    );
+
+    for (var i = 1; i <= 14; i++) {
       final t = i / 14;
       // 아래로 갈수록 간격이 벌어져 원근이 생긴다.
       final y = horizon + (size.height - horizon) * t * t;
@@ -97,7 +124,7 @@ class CyborgHeading extends StatelessWidget {
   }
 }
 
-/// 청록 테두리의 반투명 패널. 화면의 모든 내용은 이 안에 담긴다.
+/// 반투명 글래스 패널. 화면의 내용은 이 안에 담긴다.
 class CyborgPanel extends StatelessWidget {
   const CyborgPanel({
     super.key,
@@ -115,9 +142,16 @@ class CyborgPanel extends StatelessWidget {
       decoration: BoxDecoration(
         color: GamePalette.hudBackground,
         border: Border.all(
-          color: GamePalette.hudBorder.withValues(alpha: 0.35),
+          color: GamePalette.hudBorder.withValues(alpha: 0.45),
         ),
         borderRadius: BorderRadius.circular(4),
+        boxShadow: [
+          BoxShadow(
+            color: GamePalette.shadow.withValues(alpha: 0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
       child: child,
     );
@@ -154,7 +188,7 @@ class CyborgField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const border = OutlineInputBorder(
-      borderSide: BorderSide(color: Color(0xFF2E3A4A)),
+      borderSide: BorderSide(color: GamePalette.floorGrid),
       borderRadius: BorderRadius.all(Radius.circular(3)),
     );
 
@@ -168,21 +202,21 @@ class CyborgField extends StatelessWidget {
       autofillHints: autofillHints,
       onSubmitted: onSubmitted,
       style: const TextStyle(color: GamePalette.textPrimary, fontSize: 15),
-      cursorColor: GamePalette.playerAccent,
+      cursorColor: GamePalette.hudBorder,
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
         filled: true,
-        fillColor: const Color(0xFF11161F),
+        fillColor: GamePalette.floorBase,
         labelStyle: const TextStyle(color: GamePalette.textDim, fontSize: 13),
         hintStyle: TextStyle(
-          color: GamePalette.textDim.withValues(alpha: 0.5),
+          color: GamePalette.textDim.withValues(alpha: 0.6),
           fontSize: 13,
         ),
         enabledBorder: border,
         border: border,
         focusedBorder: const OutlineInputBorder(
-          borderSide: BorderSide(color: GamePalette.playerAccent, width: 1.5),
+          borderSide: BorderSide(color: GamePalette.hudBorder, width: 1.5),
           borderRadius: BorderRadius.all(Radius.circular(3)),
         ),
         contentPadding: const EdgeInsets.symmetric(
@@ -201,7 +235,7 @@ class CyborgButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.busy = false,
-    this.accent = GamePalette.playerAccent,
+    this.accent = GamePalette.hudBorder,
     this.expand = true,
   });
 
@@ -221,9 +255,9 @@ class CyborgButton extends StatelessWidget {
       onPressed: enabled ? onPressed : null,
       style: FilledButton.styleFrom(
         backgroundColor: accent,
-        foregroundColor: const Color(0xFF07131A),
-        disabledBackgroundColor: accent.withValues(alpha: 0.25),
-        disabledForegroundColor: const Color(0xFF07131A),
+        foregroundColor: Colors.white,
+        disabledBackgroundColor: accent.withValues(alpha: 0.28),
+        disabledForegroundColor: Colors.white,
         padding: const EdgeInsets.symmetric(vertical: 16),
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.all(Radius.circular(3)),
@@ -240,7 +274,7 @@ class CyborgButton extends StatelessWidget {
               height: 18,
               child: CircularProgressIndicator(
                 strokeWidth: 2,
-                color: Color(0xFF07131A),
+                color: Colors.white,
               ),
             )
           : Text(label),
@@ -269,9 +303,9 @@ class CyborgError extends StatelessWidget {
       margin: const EdgeInsets.only(top: 16),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: GamePalette.floorHazard.withValues(alpha: 0.55),
+        color: GamePalette.floorHazard,
         border: Border.all(
-          color: GamePalette.floorHazardGlow.withValues(alpha: 0.6),
+          color: GamePalette.floorHazardGlow.withValues(alpha: 0.65),
         ),
         borderRadius: BorderRadius.circular(3),
       ),
@@ -291,6 +325,7 @@ class CyborgError extends StatelessWidget {
                 color: GamePalette.floorHazardGlow,
                 fontSize: 13,
                 height: 1.4,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
@@ -386,7 +421,7 @@ class _SpinnerPainter extends CustomPainter {
     canvas.drawPath(
       _hexagon(center, radius * 0.62),
       Paint()
-        ..color = GamePalette.playerAccent
+        ..color = GamePalette.hudBorder
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.5
         ..strokeCap = StrokeCap.round,

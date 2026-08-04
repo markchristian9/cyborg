@@ -12,6 +12,9 @@ import '../palette.dart';
 import '../systems/buff.dart';
 import '../systems/inventory.dart';
 import '../systems/level_system.dart';
+import '../systems/rest_recovery.dart';
+import 'cyborg_design.dart';
+import 'cyborg_renderer.dart';
 import 'iso_entity.dart';
 import 'pickup.dart';
 import 'projectile.dart';
@@ -21,20 +24,67 @@ enum PlayerState { idle, run, melee, dash, hurt, dead }
 
 /// 인간 저항군 사이보그. 플레이어가 조작하는 캐릭터.
 class Player extends IsoEntity with Damageable {
-  Player({required Vector2 grid})
-      : super(grid: grid, bodyRadius: 0.28, depthBias: 0.02);
+  Player({
+    required Vector2 grid,
+    this.design = CyborgDesign.assault,
+  }) : super(grid: grid, bodyRadius: 0.28, depthBias: 0.02);
+
+  /// 이 플레이어가 쓰는 신체 프레임.
+  ///
+  /// 캐릭터 선택 화면에서 고른 몸이 그대로 넘어온다. 선택 화면·프리뷰와
+  /// 같은 [CyborgRenderer]로 그리므로 고른 몸과 조종하는 몸이 어긋나지 않는다.
+  final CyborgDesign design;
 
   // ── 스탯 ────────────────────────────────────────────────────────────
-  double _hp = 120;
-  double _maxHp = 120;
+  // 사이보그의 몸체는 수천 단위의 내구도를 갖는다. 수리액 한 병으로는
+  // 극히 일부만 메워지므로 회복은 꾸준히 이어 마셔야 한다.
+  /// 1레벨 사이보그의 몸체 내구도.
+  ///
+  /// 몬스터가 주는 피해가 곧 그 몬스터의 레벨이므로(1~200), 이 값은
+  /// "레벨 N 몬스터에게 몇 대까지 버티는가"를 그대로 뜻한다.
+  static const double baseMaxHp = 10000;
+
+  double _hp = baseMaxHp;
+  double _maxHp = baseMaxHp;
   double energy = 100;
   double maxEnergy = 100;
+
+  // 마력 회로. 스킬을 넉넉히 쓰도록 용량을 크게 잡았고, 야전에서는 거의
+  // 차지 않아 안전지대나 아지트로 물러나 쉬어야 채워진다.
+  double mp = 5000;
+  double _maxMp = 5000;
+  /// 지금까지 얻은 경험치의 총합. **성장에 관한 유일한 진실이다.**
+  ///
+  /// 아래 [level]·[xp] 는 여기서 나오는 파생값이고, 서버에 올리는 것도 이 값
+  /// 하나다. 셋을 따로 관리하면 서로 어긋난 상태가 생기지만, 하나만 관리하고
+  /// 나머지를 계산하면 그런 상태 자체가 만들어지지 않는다.
+  int totalXp = 0;
+
+  /// 지금 레벨. [totalXp] 에서 유도한 값이다.
   int level = 1;
+
+  /// 지금 레벨 안에서 다음 레벨까지 쌓은 진행도. [totalXp] 에서 유도한 값이다.
   int xp = 0;
+
   int xpToNextLevel = LevelSystem.xpToNext(1);
   double meleeDamage = 26;
   double rangedDamage = 18;
   double moveSpeed = 3.6; // 초당 타일 수
+
+  /// 방어력. 받는 피해를 [defenseConstant] 기준의 승수로 깎는다.
+  ///
+  /// 기본값은 0이며, 이때 받는 피해는 때린 몬스터의 레벨과 정확히 같다.
+  /// 지금은 올릴 방법이 없다 — 성장·장비·버프 중 어디에 붙일지 정해지지
+  /// 않았기 때문이다. 축만 먼저 세워 둔다.
+  double defense = 0;
+
+  /// 방어력이 이 값과 같아지면 받는 피해가 절반이 된다.
+  ///
+  /// 감산형(`피해 - 방어력`)이 아니라 승수형을 쓰는 이유는 몬스터 레벨이
+  /// 1~200으로 넓고 구역마다 레벨대가 묶여 배치되기 때문이다. 감산형이면
+  /// 방어력이 조금만 올라도 저레벨 구역 하나가 통째로 무해해진다.
+  /// 값 자체는 잠정이다 — 방어력을 얻는 경로가 생기면 그때 역산한다.
+  static const double defenseConstant = 100;
 
   /// 바닥의 전리품을 자동으로 끌어당기는 반경(타일 단위).
   double lootRadius = 2.8;
@@ -42,8 +92,17 @@ class Player extends IsoEntity with Damageable {
   /// 포션으로 얻은 강화 효과들.
   final BuffSet buffs = BuffSet();
 
+  /// 안전지대·아지트에서 쉬는 동안의 회복을 맡는다.
+  final RestRecovery rest = RestRecovery();
+
   @override
   double get hp => _hp;
+
+  /// 마력 최대치.
+  double get maxMp => _maxMp;
+
+  /// 지금 거점에서 쉬며 회복하는 중인지.
+  bool get isResting => rest.isRecovering;
 
   @override
   double get maxHp => _maxHp;
@@ -66,6 +125,27 @@ class Player extends IsoEntity with Damageable {
   /// 마지막으로 바라본 방향(그리드 좌표계).
   final Vector2 facing = Vector2(1, 1)..normalize();
 
+  /// 클릭·탭으로 지정한 이동 목표(그리드 좌표). null이면 수동 조작만 따른다.
+  Vector2? moveTarget;
+
+  /// 목표를 향하는데 나아가지 못한 시간. 벽에 끼었는지 판정한다.
+  double _stuckTime = 0;
+
+  /// **그리는 데만** 쓰는 시선각(라디안).
+  ///
+  /// [facing]은 입력을 즉시 반영해야 한다 — 근접 판정·사격·대시가 모두 그
+  /// 값을 읽으므로, 보간을 걸면 "보이는 방향으로 안 때리는" 조작이 된다.
+  /// 대신 그림만 각속도 상한을 두고 따라오게 해서 한 프레임에 180° 홱 도는
+  /// 것을 막는다.
+  double _renderYaw = 0;
+  bool _renderYawPrimed = false;
+
+  /// 그림이 목표 방향을 따라잡는 최대 각속도(라디안/초).
+  ///
+  /// 낮추면 부드럽지만 조작이 굼떠 보인다. 0.1초 안에 반 바퀴를 돌 수 있는
+  /// 수준이라 체감 지연은 거의 없다.
+  static const double _renderTurnRate = 14.0;
+
   final Vector2 _velocity = Vector2.zero();
   final Vector2 _knockback = Vector2.zero();
 
@@ -85,7 +165,12 @@ class Player extends IsoEntity with Damageable {
   final List<_DashGhost> _ghosts = [];
 
   static const double _meleeDuration = 0.32;
-  static const double _meleeRange = 1.5;
+
+  /// 근접 공격이 닿는 거리(타일). 대상의 몸 반경은 여기에 더해 판정한다.
+  ///
+  /// 자동 사냥이 "얼마나 붙어야 때릴 수 있는지" 를 알아야 하므로 공개한다.
+  /// 이 값과 실제 판정이 어긋나면 닿지도 않는 자리에서 계속 헛스윙한다.
+  static const double meleeRange = 1.5;
   static const double _dashDuration = 0.18;
   static const double _dashSpeed = 13.0;
 
@@ -111,15 +196,21 @@ class Player extends IsoEntity with Damageable {
     );
   }
 
-  /// 플라즈마 볼트를 발사한다.
+  /// 한 발에 드는 마력.
+  ///
+  /// 1레벨 마력 5,000으로 약 83발을 쏠 수 있다. 사냥 한 바퀴를 넉넉히
+  /// 돌 만큼이되, 무한정 난사하면 거점으로 돌아가 쉬어야 한다.
+  static const double plasmaMpCost = 60;
+
+  /// 플라즈마 볼트를 발사한다. 마력을 쓴다.
   void tryShoot() {
     if (!isAlive || _shootCooldown > 0) return;
-    if (energy < 12) {
+    if (mp < plasmaMpCost) {
       GameAudio.play(Sfx.uiError);
       return;
     }
     _shootCooldown = 0.24;
-    energy -= 12;
+    mp -= plasmaMpCost;
     final dir = facing.clone()..normalize();
     game.spawnProjectile(
       Projectile(
@@ -174,14 +265,30 @@ class Player extends IsoEntity with Damageable {
       maxEnergy,
       energy + dt * 16 * buffs.energyRegenMultiplier,
     );
+    _updateRest(dt);
 
     _updateMovement(dt);
+    _updateRenderYaw(dt);
     _updateSteps(dt);
     _updateMelee();
     _updateHazard(dt);
     _updateGhosts(dt);
 
     super.update(dt);
+  }
+
+  /// 거점 안에서 쉬는 동안 체력과 마력을 채운다.
+  ///
+  /// 지금 거점은 월드 한가운데의 안전지대뿐이다. 아지트가 생기면
+  /// 판정만 넓히면 되고 회복 규칙은 그대로 쓴다.
+  void _updateRest(double dt) {
+    rest.update(dt, sheltered: game.map.safeZone.containsPoint(grid));
+
+    final hpGain = rest.hpGain(dt, _maxHp);
+    if (hpGain > 0) _hp = math.min(_maxHp, _hp + hpGain);
+
+    final mpGain = rest.mpGain(dt, _maxMp);
+    if (mpGain > 0) mp = math.min(_maxMp, mp + mpGain);
   }
 
   /// 이동 속도에 맞춰 발소리 간격을 조절한다.
@@ -225,6 +332,9 @@ class Player extends IsoEntity with Damageable {
         _ghosts.add(_DashGhost(grid.clone(), facing.clone()));
       }
     } else if (moveInput.length2 > 0.001) {
+      // 키보드·조이스틱이 들어오면 클릭 목표를 버린다. 손으로 잡은 조작이
+      // 항상 이긴다.
+      clearMoveTarget();
       final dir = moveInput.normalized();
       facing.setFrom(dir);
       final speedFactor = state == PlayerState.melee ? 0.35 : 1.0;
@@ -232,6 +342,8 @@ class Player extends IsoEntity with Damageable {
         ..setFrom(dir)
         ..scale(effectiveMoveSpeed * speedFactor);
       if (state != PlayerState.melee) state = PlayerState.run;
+    } else if (moveTarget != null) {
+      _steerToTarget();
     } else {
       _velocity.setZero();
       if (state == PlayerState.run) state = PlayerState.idle;
@@ -243,7 +355,72 @@ class Player extends IsoEntity with Damageable {
       _knockback.scale(math.max(0, 1 - dt * 9));
     }
 
+    final before = grid.clone();
     _moveWithCollision(_velocity * dt);
+
+    // 목표를 향하는데 실제로 나아가지 못하면(벽에 막힘) 오래 붙어 있지 않고
+    // 목표를 버린다. 경로 탐색 없이도 캐릭터가 벽에 비비지 않게 하는 장치다.
+    if (moveTarget != null && !isDashing) {
+      final progressed = (grid - before).length;
+      if (progressed < effectiveMoveSpeed * dt * 0.25) {
+        _stuckTime += dt;
+        if (_stuckTime > 0.35) clearMoveTarget();
+      } else {
+        _stuckTime = 0;
+      }
+    }
+  }
+
+  /// 클릭으로 지정한 지점을 향해 방향과 속도를 잡는다.
+  void _steerToTarget() {
+    final target = moveTarget!;
+    final to = target - grid;
+    // 목표에 충분히 가까우면 멈춘다. 반경을 두지 않으면 목표 위에서 떨린다.
+    if (to.length < 0.18) {
+      clearMoveTarget();
+      _velocity.setZero();
+      if (state == PlayerState.run) state = PlayerState.idle;
+      return;
+    }
+
+    final dir = to.normalized();
+    facing.setFrom(dir);
+    final speedFactor = state == PlayerState.melee ? 0.35 : 1.0;
+    // 목표 직전에는 속도를 줄여 부드럽게 선다.
+    final arrive = to.length < 0.6 ? to.length / 0.6 : 1.0;
+    _velocity
+      ..setFrom(dir)
+      ..scale(effectiveMoveSpeed * speedFactor * arrive);
+    if (state != PlayerState.melee) state = PlayerState.run;
+  }
+
+  /// 클릭·탭으로 [target](그리드 좌표)까지 걸어가게 한다.
+  ///
+  /// 경로 탐색은 하지 않는다. 직선으로 향하되 벽에는 기존 슬라이딩 충돌로
+  /// 미끄러지고, 그래도 나아가지 못하면 스스로 목표를 버린다.
+  void moveTo(Vector2 target) {
+    if (!isAlive) return;
+    moveTarget = target.clone();
+    _stuckTime = 0;
+  }
+
+  /// 진행 중인 클릭 이동을 취소한다.
+  void clearMoveTarget() {
+    moveTarget = null;
+    _stuckTime = 0;
+  }
+
+  /// 제자리에서 [point] 쪽으로 몸을 돌린다.
+  ///
+  /// 근접 공격은 전방 약 120° 부채꼴만 때리는데, 멈춰 서 있으면 [facing] 은
+  /// 갱신되지 않는다([_updateMovement] 는 이동할 때만 방향을 잡는다). 자동
+  /// 사냥처럼 붙어서 멈춘 뒤 때리는 경우 이 메서드로 방향을 맞추지 않으면
+  /// 옆이나 등 뒤의 대상을 향해 계속 헛스윙한다.
+  void faceTowards(Vector2 point) {
+    if (!isAlive) return;
+    final to = point - grid;
+    if (to.length2 < 1e-6) return;
+    facing.setFrom(to.normalized());
   }
 
   /// 축을 분리해 이동시켜 벽을 따라 미끄러지도록 한다.
@@ -287,9 +464,12 @@ class Player extends IsoEntity with Damageable {
     var hitAny = false;
 
     for (final target in game.meleeTargets()) {
+      // 목록은 스냅샷이다. 앞선 대상을 때려 죽인 뒤에도 계속 돌기 때문에,
+      // 이미 쓰러진 대상은 여기서 걸러야 시체에 타격 이펙트가 남지 않는다.
+      if (!target.isAlive) continue;
       final toTarget = target.grid - grid;
       final distance = toTarget.length;
-      if (distance > _meleeRange + target.bodyRadius) continue;
+      if (distance > meleeRange + target.bodyRadius) continue;
       if (distance > 0.001) {
         final alignment = toTarget.normalized().dot(dir);
         // 전방 약 120도 부채꼴.
@@ -328,7 +508,14 @@ class Player extends IsoEntity with Damageable {
     _hazardTick += dt;
     if (_hazardTick >= 0.5) {
       _hazardTick = 0;
-      applyDamage(5, ignoreInvulnerable: true);
+      // 방화벽은 무적도 방어력도 무시한다. 지형 위험은 장갑으로 버티는 것이
+      // 아니라 밟지 않고 지나가는 것이다. 피해량은 몬스터 레벨과 무관한
+      // 별도 축이므로 최대 체력에 비례해 정한다(1초에 약 8%).
+      applyDamage(
+        _maxHp * 0.04,
+        ignoreInvulnerable: true,
+        ignoreDefense: true,
+      );
     }
   }
 
@@ -341,12 +528,25 @@ class Player extends IsoEntity with Damageable {
 
   // ── 피해 / 성장 ─────────────────────────────────────────────────────
 
+  /// 방어력을 적용하고 남은 피해.
+  ///
+  /// 방어력이 0이면 들어온 값을 그대로 돌려준다 — "레벨 N 몬스터는 N" 이라는
+  /// 규격이 성립하는 지점이다.
+  ///
+  /// 상태에 기대지 않는 순수 함수로 두었다. 전투를 서버 권위로 옮길 때
+  /// 이 함수만 Rust 로 옮기면 되고, 지금은 게임 객체 없이 테스트할 수 있다.
+  static double damageAfterDefense(double amount, double defense) {
+    if (defense <= 0) return amount;
+    return amount * defenseConstant / (defenseConstant + defense);
+  }
+
   @override
   void applyDamage(
     double amount, {
     Vector2? knockback,
     bool critical = false,
     bool ignoreInvulnerable = false,
+    bool ignoreDefense = false,
   }) {
     if (!isAlive) return;
     if (!ignoreInvulnerable && (isInvulnerable || isDashing)) return;
@@ -354,12 +554,20 @@ class Player extends IsoEntity with Damageable {
     // 상태를 지켜 주는 것이 이 구역의 존재 이유다.
     if (game.map.isInSafeZone(grid.x, grid.y)) return;
 
-    // 장갑 경화 같은 버프는 들어오는 피해 자체를 깎는다.
-    final taken = amount * buffs.damageTakenMultiplier;
+    // 방어력 → 버프 순으로 깎은 뒤 마지막에 한 번만 정수로 만든다.
+    //
+    // 정수화를 한 번만 하는 이유는 HP에서 깎이는 값과 화면에 뜨는 숫자와
+    // 피격음 크기가 모두 같은 값이어야 하기 때문이다. 중간에서 반올림하면
+    // 방어력이나 장갑 경화가 걸렸을 때 표시와 실제가 어긋난다.
+    final afterDefense =
+        ignoreDefense ? amount : damageAfterDefense(amount, defense);
+    final taken = (afterDefense * buffs.damageTakenMultiplier).roundToDouble();
 
     _hp = math.max(0, _hp - taken);
     _invulnerable = math.max(_invulnerable, 0.55);
     if (knockback != null) _knockback.add(knockback);
+    // 얻어맞자마자 거점으로 뛰어들어 즉시 회복하는 것을 막는다.
+    rest.notifyDamaged();
 
     game.spawnEffect(
       DamageText(
@@ -382,7 +590,9 @@ class Player extends IsoEntity with Damageable {
       // 큰 피해일수록 크게 들리도록 한다.
       GameAudio.play(
         Sfx.playerHurt,
-        volumeScale: (0.5 + taken / 40).clamp(0.5, 1.2),
+        // 최대 체력 대비로 재야 한다. 고정 분모를 쓰면 체력이 1만인 지금은
+        // 어떤 피해를 입어도 항상 최소 볼륨으로 들린다.
+        volumeScale: (0.5 + taken / (_maxHp * 0.02)).clamp(0.5, 1.2),
       );
     }
   }
@@ -402,12 +612,17 @@ class Player extends IsoEntity with Damageable {
     grid.setFrom(point);
     _hp = _maxHp;
     energy = maxEnergy;
+    mp = _maxMp;
+    rest.reset();
     state = PlayerState.idle;
 
     moveInput.setZero();
     _velocity.setZero();
     _knockback.setZero();
     _ghosts.clear();
+    // 쓰러지기 전에 향하던 클릭 목표는 죽은 자리 근처다. 그대로 두면 재가동
+    // 직후 아무도 조작하지 않았는데 혼자 안전지대 밖으로 걸어 나간다.
+    clearMoveTarget();
 
     _deathTimer = 0;
     _meleeTimer = 0;
@@ -422,6 +637,41 @@ class Player extends IsoEntity with Damageable {
     _invulnerable = respawnInvulnerability;
 
     // 순간이동이므로 화면 좌표도 이번 프레임에 바로 맞춘다.
+    syncTransform();
+  }
+
+  /// [point]로 순간이동한다.
+  ///
+  /// [respawnAt]과 달리 **체력과 에너지를 건드리지 않는다.** 죽어서 새 몸체를
+  /// 받는 것이 아니라 멀쩡한 몸으로 자리만 옮기는 것이므로, 회복시켜 주면
+  /// 위험할 때마다 텔레포트로 몸을 추스르는 편법이 된다. 같은 이유로 공격·대시
+  /// 쿨다운도 그대로 둔다.
+  ///
+  /// 다만 이동 관성과 진행 중이던 동작은 정리한다. 그러지 않으면 도착하자마자
+  /// 떠나온 곳에서 밀리던 방향으로 미끄러진다.
+  void teleportTo(Vector2 point) {
+    if (!isAlive) return;
+
+    grid.setFrom(point);
+    state = PlayerState.idle;
+
+    moveInput.setZero();
+    _velocity.setZero();
+    _knockback.setZero();
+    // 잔상은 떠나온 자리의 것이라 그대로 두면 월드를 가로지르는 선이 된다.
+    _ghosts.clear();
+    // 떠나온 곳의 클릭 목표도 함께 버린다. 남겨 두면 도착하자마자 왔던
+    // 방향으로 되돌아 걷는다.
+    clearMoveTarget();
+
+    _dashTimer = 0;
+    _meleeTimer = 0;
+    _comboStep = 0;
+    _comboWindow = 0;
+    _meleeHitApplied = true;
+    // 밟고 있던 유해 지형의 누적을 새 지형으로 끌고 가지 않는다.
+    _hazardTick = 0;
+
     syncTransform();
   }
 
@@ -484,11 +734,13 @@ class Player extends IsoEntity with Damageable {
   }
 
   /// 경험치를 획득하고 필요 시 레벨업한다. 한 번에 여러 레벨이 오를 수 있다.
+  ///
+  /// **만렙이 없다.** 레벨 상한 대신 곡선이 속도를 조절하므로, 경험치는 언제나
+  /// 쌓이고 레벨은 언제나 오를 수 있다.
   void gainXp(int amount, {bool showText = true}) {
     if (!isAlive || amount <= 0) return;
-    if (level >= LevelSystem.maxLevel) return;
 
-    xp += amount;
+    totalXp = math.min(LevelSystem.maxTotalXp, totalXp + amount);
     if (showText) {
       game.spawnEffect(
         DamageText(
@@ -501,27 +753,65 @@ class Player extends IsoEntity with Damageable {
       );
     }
 
-    while (level < LevelSystem.maxLevel && xp >= xpToNextLevel) {
-      xp -= xpToNextLevel;
+    // 누적에서 새 레벨을 구한다. 몇 레벨이 한꺼번에 올랐든 그 수만큼 연출을
+    // 내보내야 하므로 차이만큼 반복한다.
+    final reached = LevelSystem.levelForTotalXp(totalXp);
+    while (level < reached) {
       _levelUp();
     }
-    // 만렙에 도달하면 남은 경험치는 버린다.
-    if (level >= LevelSystem.maxLevel) xp = 0;
+    xp = LevelSystem.progressWithin(totalXp);
+  }
+
+  /// 서버에 저장된 성장 상태를 그대로 이어받는다.
+  ///
+  /// 접속할 때마다 1 레벨로 태어나면 서버는 이미 더 많은 누적을 알고 있으므로
+  /// 뒤로 가는 보고를 전부 버린다 — 아무리 사냥해도 예전 기록을 넘기 전까지
+  /// 순위가 미동도 하지 않는다. 그래서 출격 시점에 서버 값을 먼저 채운다.
+  ///
+  /// 받는 값이 **누적 경험치 하나**인 것이 중요하다. 레벨과 진행도를 따로 받으면
+  /// 셋이 어긋난 상태(레벨 20 인데 누적은 3 레벨분)가 만들어질 수 있는데,
+  /// 하나만 받아 나머지를 계산하면 그런 상태가 존재할 수 없다.
+  ///
+  /// [_levelUp] 을 반복해서 부르지 않는 이유도 있다. 그쪽은 배너·효과음·서버
+  /// 보고를 함께 일으키므로, 25 레벨 캐릭터로 접속하면 레벨업 연출이 24 번
+  /// 터지고 그만큼의 보고가 되돌아 나간다. 여기서는 **스탯만** 맞춘다.
+  void restoreProgress({required int totalXp}) {
+    this.totalXp = math.max(0, math.min(LevelSystem.maxTotalXp, totalXp));
+    final target = LevelSystem.levelForTotalXp(this.totalXp);
+
+    for (var next = level + 1; next <= target; next++) {
+      _applyGains(LevelSystem.gainsFor(next));
+      level = next;
+    }
+    xpToNextLevel = LevelSystem.xpToNext(level);
+    xp = LevelSystem.progressWithin(this.totalXp);
+
+    // 복원 직후에는 만신창이가 아니라 온전한 몸으로 시작한다.
+    _hp = _maxHp;
+    energy = maxEnergy;
+    mp = _maxMp;
+  }
+
+  /// 레벨 한 단계가 올려 주는 스탯. 성장과 복원이 같은 계산을 쓰게 묶어 둔다.
+  void _applyGains(LevelGains gains) {
+    _maxHp += gains.maxHp;
+    maxEnergy += gains.maxEnergy;
+    _maxMp += gains.maxMp;
+    meleeDamage += gains.meleeDamage;
+    rangedDamage += gains.rangedDamage;
+    moveSpeed += gains.moveSpeed;
   }
 
   void _levelUp() {
     level++;
     final gains = LevelSystem.gainsFor(level);
-    _maxHp += gains.maxHp;
-    maxEnergy += gains.maxEnergy;
-    meleeDamage += gains.meleeDamage;
-    rangedDamage += gains.rangedDamage;
-    moveSpeed += gains.moveSpeed;
+    _applyGains(gains);
     xpToNextLevel = LevelSystem.xpToNext(level);
 
     // 레벨업하면 완전히 회복하고 잠깐 무적이 된다.
     _hp = _maxHp;
     energy = maxEnergy;
+    mp = _maxMp;
     _invulnerable = math.max(_invulnerable, 0.6);
 
     game.spawnEffect(
@@ -559,11 +849,7 @@ class Player extends IsoEntity with Damageable {
       return;
     }
 
-    canvas.save();
-    final right = facesRight(facing);
-    if (!right) canvas.scale(-1, 1);
-    _renderBody(canvas, back: !facesDown(facing));
-    canvas.restore();
+    _drawFrame(canvas);
 
     if (state == PlayerState.melee) {
       _renderBladeSwing(canvas);
@@ -620,188 +906,56 @@ class Player extends IsoEntity with Damageable {
           BlendMode.srcATop,
         ),
     );
-    if (!facesRight(ghost.facing)) canvas.scale(-1, 1);
-    _renderBody(canvas, back: !facesDown(ghost.facing));
+    _drawFrame(canvas, yaw: facingYaw(ghost.facing));
     canvas.restore();
     canvas.restore();
   }
 
   /// 사이보그 본체. 원점은 발밑, 화면 정렬(빌보드)로 그린다.
-  void _renderBody(Canvas canvas, {required bool back}) {
+
+  /// 사이보그 본체를 [dir] 방향으로 그린다.
+  ///
+  /// 캐릭터 선택 화면·프리뷰와 **같은 [CyborgRenderer]** 를 쓴다. 방향은
+  /// 8방향 같은 이산값이 아니라 [facingYaw]가 주는 **연속 각도**라, 몸이
+  /// 도는 동안 눈에 띄는 계단이 생기지 않는다.
+  /// 렌더용 시선각을 [facing] 쪽으로 각속도 상한 안에서 굴린다.
+  void _updateRenderYaw(double dt) {
+    final target = facingYaw(facing);
+    if (!_renderYawPrimed) {
+      _renderYaw = target;
+      _renderYawPrimed = true;
+      return;
+    }
+    // 각도 차이를 -π~π 로 접어야 359°→1° 전환에서 한 바퀴를 되돌지 않는다.
+    var delta = (target - _renderYaw) % (math.pi * 2);
+    if (delta > math.pi) delta -= math.pi * 2;
+    if (delta < -math.pi) delta += math.pi * 2;
+
+    final maxStep = _renderTurnRate * dt;
+    _renderYaw += delta.clamp(-maxStep, maxStep);
+  }
+
+  /// 본체를 그린다.
+  ///
+  /// [yaw]를 주면 그 각도로, 없으면 보간된 [_renderYaw]로 그린다. 대시 잔상은
+  /// 남긴 순간의 방향을 그대로 써야 하므로 직접 넘긴다.
+  void _drawFrame(Canvas canvas, {double? yaw}) {
     final running = state == PlayerState.run || isDashing;
     final cycle = _animTime * (isDashing ? 20 : 9);
     final swing = running ? math.sin(cycle) : 0.0;
-    final bob = running ? math.sin(cycle * 2) * 2.0 : math.sin(_animTime * 2) * 1.2;
+    final bob = running
+        ? math.sin(cycle * 2) * 2.0 * design.bobScale
+        : math.sin(_animTime * 2) * 1.2;
 
-    final armor = Paint()..color = GamePalette.playerArmor;
-    final armorLight = Paint()..color = GamePalette.playerArmorLight;
-    final accent = Paint()..color = GamePalette.playerAccent;
-    final dark = Paint()..color = const Color(0xFF161C25);
-
-    final baseY = -bob;
-
-    // 다리
-    for (var i = 0; i < 2; i++) {
-      final phase = i == 0 ? swing : -swing;
-      final legX = i == 0 ? -7.0 : 7.0;
-      final path = Path()
-        ..moveTo(legX - 4, baseY - 42)
-        ..lineTo(legX + 4, baseY - 42)
-        ..lineTo(legX + 4 + phase * 5, baseY - 4)
-        ..lineTo(legX - 4 + phase * 5, baseY - 4)
-        ..close();
-      canvas.drawPath(path, i == 0 ? armor : dark);
-      // 부츠
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(legX - 6 + phase * 5, baseY - 8, 13, 7),
-          const Radius.circular(2),
-        ),
-        dark,
-      );
-    }
-
-    // 몸통(사다리꼴 아머)
-    final torso = Path()
-      ..moveTo(-11, baseY - 74)
-      ..lineTo(11, baseY - 74)
-      ..lineTo(9, baseY - 40)
-      ..lineTo(-9, baseY - 40)
-      ..close();
-    canvas.drawPath(torso, armor);
-
-    // 흉갑 하이라이트
-    final chest = Path()
-      ..moveTo(-8, baseY - 72)
-      ..lineTo(2, baseY - 72)
-      ..lineTo(0, baseY - 52)
-      ..lineTo(-7, baseY - 52)
-      ..close();
-    canvas.drawPath(chest, armorLight);
-
-    if (!back) {
-      // 가슴 에너지 코어
-      canvas.drawCircle(
-        Offset(0, baseY - 60),
-        4.5,
-        Paint()
-          ..color = GamePalette.playerAccent
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
-      );
-      canvas.drawCircle(Offset(0, baseY - 60), 2.6, accent);
-    } else {
-      // 등 뒤 동력팩
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(-8, baseY - 70, 16, 20),
-          const Radius.circular(3),
-        ),
-        Paint()..color = const Color(0xFF1E2733),
-      );
-      canvas.drawRect(
-        Rect.fromLTWH(-5, baseY - 66, 10, 3),
-        accent,
-      );
-    }
-
-    // 어깨 패드
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(-16, baseY - 76, 11, 12),
-        const Radius.circular(4),
-      ),
-      armorLight,
+    CyborgRenderer.drawBody(
+      canvas,
+      design: design,
+      yaw: yaw ?? _renderYaw,
+      baseY: -bob,
+      swing: swing,
+      armSwing: running ? -swing * 6 : 0,
+      time: _animTime,
     );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(5, baseY - 76, 11, 12),
-        const Radius.circular(4),
-      ),
-      armorLight,
-    );
-
-    // 팔(무기 쪽은 앞으로)
-    final armSwing = running ? -swing * 6 : 0.0;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(-17, baseY - 66 + armSwing, 7, 22),
-        const Radius.circular(3),
-      ),
-      armor,
-    );
-    final weaponArm = Path()
-      ..moveTo(11, baseY - 66)
-      ..lineTo(18, baseY - 62)
-      ..lineTo(18, baseY - 50)
-      ..lineTo(11, baseY - 48)
-      ..close();
-    canvas.drawPath(weaponArm, armorLight);
-
-    // 목
-    canvas.drawRect(Rect.fromLTWH(-3, baseY - 80, 6, 7), dark);
-
-    // 머리(헬멧)
-    final headCenter = Offset(0.5, baseY - 88);
-    canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        Rect.fromCenter(center: headCenter, width: 21, height: 19),
-        topLeft: const Radius.circular(8),
-        topRight: const Radius.circular(8),
-        bottomLeft: const Radius.circular(4),
-        bottomRight: const Radius.circular(4),
-      ),
-      armorLight,
-    );
-
-    if (!back) {
-      // 바이저
-      final visor = RRect.fromRectAndRadius(
-        Rect.fromLTWH(-2, baseY - 92, 12, 6),
-        const Radius.circular(3),
-      );
-      canvas.drawRRect(
-        visor,
-        Paint()
-          ..color = GamePalette.playerVisor
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
-      );
-      canvas.drawRRect(visor, Paint()..color = GamePalette.playerVisor);
-      // 턱 라인
-      canvas.drawRect(
-        Rect.fromLTWH(-3, baseY - 84, 9, 3),
-        Paint()..color = GamePalette.playerSkin,
-      );
-    } else {
-      // 뒤통수 케이블
-      canvas.drawLine(
-        Offset(0, baseY - 84),
-        Offset(-2, baseY - 72),
-        Paint()
-          ..color = accent.color.withValues(alpha: 0.7)
-          ..strokeWidth = 2,
-      );
-    }
-
-    // 헬멧 안테나
-    canvas.drawLine(
-      Offset(-6, baseY - 96),
-      Offset(-9, baseY - 106),
-      Paint()
-        ..color = GamePalette.playerAccent
-        ..strokeWidth = 1.6,
-    );
-    canvas.drawCircle(Offset(-9, baseY - 107), 1.8, accent);
-
-    // 대기 상태에서 블레이드를 손에 든 실루엣
-    if (state != PlayerState.melee) {
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(17, baseY - 58, 3, 26),
-          const Radius.circular(1.5),
-        ),
-        Paint()..color = GamePalette.bladeGlow.withValues(alpha: 0.55),
-      );
-    }
   }
 
   /// 에너지 블레이드 스윙 궤적.
@@ -866,7 +1020,7 @@ class Player extends IsoEntity with Damageable {
     canvas.translate(0, -6 * (1 - t));
     canvas.rotate(-math.pi / 2 * t);
     canvas.scale(1, 1 - t * 0.15);
-    _renderBody(canvas, back: false);
+    _drawFrame(canvas);
     canvas.restore();
 
     // 파손된 코어에서 새어 나오는 스파크

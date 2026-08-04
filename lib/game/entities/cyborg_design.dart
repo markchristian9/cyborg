@@ -185,7 +185,9 @@ class CyborgDesign {
     shoulderWidth: 25,
     chestWidth: 18,
     waistWidth: 13.5,
-    hipWidth: 18,
+    // 골반이 가슴보다 넓어야 실제로 모래시계가 된다. 같으면 "잘록한 원통"에
+    // 그쳐 축소했을 때 남성형과 구분되지 않는다.
+    hipWidth: 21,
     legThickness: 7,
     armThickness: 5.5,
     neckLength: 8,

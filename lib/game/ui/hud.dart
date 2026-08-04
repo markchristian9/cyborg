@@ -5,7 +5,6 @@ import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 
 import '../action_rpg_game.dart';
-import '../entities/enemy.dart';
 import '../entities/pickup.dart';
 import '../level/level_map.dart';
 import '../palette.dart';
@@ -103,7 +102,7 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
     const panelWidth = 268.0;
 
     final panel = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(left - 8, top - 8, panelWidth, 96),
+      const Rect.fromLTWH(left - 8, top - 8, panelWidth, 112),
       const Radius.circular(10),
     );
     canvas.drawRRect(panel, Paint()..color = GamePalette.hudBackground);
@@ -135,10 +134,10 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
       Vector2(left + 22, top + 24),
       anchor: Anchor.center,
     );
-    final atMaxLevel = player.level >= LevelSystem.maxLevel;
+    // 만렙이 없으므로 'MAX' 표시도 없다. 레벨은 언제나 더 오를 수 있다.
     _label.render(
       canvas,
-      atMaxLevel ? 'MAX' : 'LV',
+      'LV',
       Vector2(left + 22, top + 48),
       anchor: Anchor.topCenter,
     );
@@ -156,24 +155,36 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
       label: 'HP',
       valueText: '${player.hp.ceil()} / ${player.maxHp.round()}',
     );
+    // 마력. 스킬을 굴리는 자원이라 남은 양을 숫자까지 보여 준다.
     _renderBar(
       canvas,
-      Rect.fromLTWH(barLeft, top + 24, barWidth, 9),
+      Rect.fromLTWH(barLeft, top + 20, barWidth, 12),
+      player.mp / player.maxMp,
+      GamePalette.mpFill,
+      label: 'MP',
+      valueText: '${player.mp.floor()} / ${player.maxMp.round()}',
+    );
+    _renderBar(
+      canvas,
+      Rect.fromLTWH(barLeft, top + 38, barWidth, 8),
       player.energy / player.maxEnergy,
       GamePalette.energyFill,
       label: 'EN',
     );
-    // 만렙이면 게이지를 가득 채워 둔다(진행할 다음 레벨이 없다).
     _renderBar(
       canvas,
-      Rect.fromLTWH(barLeft, top + 40, barWidth, 6),
-      atMaxLevel ? 1.0 : player.xp / player.xpToNextLevel,
+      Rect.fromLTWH(barLeft, top + 52, barWidth, 6),
+      player.xp / player.xpToNextLevel,
       GamePalette.xpFill,
     );
 
+    if (player.rest.isSheltered) {
+      _renderRestBadge(canvas, Rect.fromLTWH(barLeft, top + 2, barWidth, 13));
+    }
+
     // 대시 쿨다운 표시
     final dashReady = game.player.dashCooldownRatio <= 0;
-    final dashRect = Rect.fromLTWH(barLeft, top + 54, 58, 14);
+    final dashRect = Rect.fromLTWH(barLeft, top + 66, 58, 14);
     canvas.drawRRect(
       RRect.fromRectAndRadius(dashRect, const Radius.circular(4)),
       Paint()..color = const Color(0xFF14202B),
@@ -201,11 +212,50 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
     );
 
     // 처치 수
-    _label.render(canvas, 'KILLS', Vector2(barLeft + 74, top + 54));
-    _value.render(canvas, '${game.kills}', Vector2(barLeft + 74, top + 66 - 2));
+    _label.render(canvas, 'KILLS', Vector2(barLeft + 74, top + 66));
+    _value.render(canvas, '${game.kills}', Vector2(barLeft + 74, top + 76));
 
-    _label.render(canvas, 'SCORE', Vector2(barLeft + 126, top + 54));
-    _value.render(canvas, '${game.score}', Vector2(barLeft + 126, top + 64));
+    _label.render(canvas, 'SCORE', Vector2(barLeft + 126, top + 66));
+    _value.render(canvas, '${game.score}', Vector2(barLeft + 126, top + 76));
+  }
+
+  /// 안전지대 안일 때 체력 바 오른쪽 위에 붙는 휴식 배지.
+  ///
+  /// 회복이 이미 돌고 있으면 초록으로 맥동하고, 얻어맞은 직후라 아직
+  /// 기다려야 하면 남은 시간을 흐린 글씨로 알려 준다.
+  void _renderRestBadge(Canvas canvas, Rect hpRect) {
+    final rest = game.player.rest;
+    final recovering = rest.isRecovering;
+    final color = recovering ? GamePalette.healGlow : GamePalette.textDim;
+    final pulse = recovering ? 0.7 + math.sin(_time * 5) * 0.3 : 1.0;
+
+    final text = recovering
+        ? 'RESTING'
+        : 'REST IN ${rest.warmupRemaining.ceil()}s';
+    final badge = Rect.fromLTWH(hpRect.right - 84, hpRect.top - 15, 84, 14);
+    final rrect = RRect.fromRectAndRadius(badge, const Radius.circular(7));
+
+    canvas.drawRRect(rrect, Paint()..color = GamePalette.hudBackground);
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..color = color.withValues(alpha: 0.75 * pulse),
+    );
+    TextPaint(
+      style: TextStyle(
+        color: color.withValues(alpha: pulse),
+        fontSize: 9,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 1,
+      ),
+    ).render(
+      canvas,
+      text,
+      Vector2(badge.center.dx, badge.center.dy),
+      anchor: Anchor.center,
+    );
   }
 
   void _renderBar(
@@ -422,7 +472,7 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
     // 적. 지휘 유닛은 크게 찍어 멀리서도 알아보게 한다.
     for (final enemy in game.enemies) {
       if (!enemy.isAlive) continue;
-      final isBoss = enemy.kind == EnemyKind.commander;
+      final isBoss = enemy.isBoss;
       canvas.drawCircle(
         toRadar(enemy.grid),
         isBoss ? 4 : 2.2,

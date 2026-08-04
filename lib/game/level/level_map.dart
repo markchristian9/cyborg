@@ -114,11 +114,31 @@ class LevelMap {
   /// 플레이어가 시작하는 그리드 좌표.
   final Vector2 spawn;
 
-  /// 월드 한 변의 길이(미터).
+  /// 격자 한 변의 길이(미터). 통행 불가 테두리를 포함한다.
   double get widthInMeters => tilesToMeters(width.toDouble());
 
-  /// 월드 세로 길이(미터).
+  /// 격자 세로 길이(미터). 통행 불가 테두리를 포함한다.
   double get heightInMeters => tilesToMeters(height.toDouble());
+
+  /// 걸을 수 있는 영역의 첫 칸(포함).
+  int get playableMin => kWorldEdgeMarginTiles;
+
+  /// 걸을 수 있는 영역의 마지막 칸 다음(배타적).
+  int get playableMaxX => width - kWorldEdgeMarginTiles;
+
+  /// 걸을 수 있는 영역의 마지막 칸 다음(배타적).
+  int get playableMaxY => height - kWorldEdgeMarginTiles;
+
+  /// 플레이어가 실제로 걸을 수 있는 가로 길이(미터).
+  ///
+  /// 이 값이 규격에서 말하는 "월드의 크기"다. 격자 크기([widthInMeters])는
+  /// 여기에 허공 테두리를 더한 것이라 조금 더 크다.
+  double get playableWidthInMeters =>
+      tilesToMeters((playableMaxX - playableMin).toDouble());
+
+  /// 플레이어가 실제로 걸을 수 있는 세로 길이(미터).
+  double get playableHeightInMeters =>
+      tilesToMeters((playableMaxY - playableMin).toDouble());
 
   int get chunksX => (width + kChunkTiles - 1) ~/ kChunkTiles;
   int get chunksY => (height + kChunkTiles - 1) ~/ kChunkTiles;
@@ -212,6 +232,15 @@ class LevelMap {
     return spawn.clone();
   }
 
+  /// [point]가 [nearestWalkable]의 **실패 반환값**(월드 중앙 스폰)인지 여부.
+  ///
+  /// `nearestWalkable`은 반경 안에서 걸을 수 있는 칸을 못 찾으면 예외 대신
+  /// 스폰 지점을 돌려준다. 그 값을 그대로 이동 목표로 삼으면 허공을 찍었는데
+  /// 캐릭터가 안전지대까지 걸어가 버리므로, 호출한 쪽이 실패를 알아볼 수
+  /// 있어야 한다.
+  bool isWalkableFallback(Vector2 point) =>
+      point.distanceToSquared(spawn) < 0.001;
+
   // TileType 인덱스 캐시. 매 칸 검사에서 enum 조회를 피한다.
   static final int _tNone = TileType.none.index;
   static final int _tFloor = TileType.floor.index;
@@ -242,7 +271,9 @@ class LevelMap {
     // 저해상도 노이즈를 보간해 100만 칸을 훑는다. 값이 낮은 골짜기가 허공이 된다.
     final voidNoise = _ValueNoise(24, random);
     final edgeNoise = _ValueNoise(72, random);
-    const margin = 3;
+    // 걸을 수 있는 1 km 바깥을 두르는 허공 테두리. 통행 가능 영역은
+    // 이 테두리를 뺀 [kWorldPlayableTiles] × [kWorldPlayableTiles]다.
+    const margin = kWorldEdgeMarginTiles;
 
     for (var y = 0; y < height; y++) {
       final v = y / height;

@@ -19,11 +19,20 @@ enum LootRarity { common, uncommon, rare }
 /// 셀 따위가 튀어나온다. 포션류는 인벤토리에 쌓이고, 데이터 칩과 스크랩
 /// 코어는 회수하는 즉시 경험치·점수로 환산된다.
 enum PickupKind {
-  /// 소형 나노 수리액. 체력을 조금 회복한다.
+  /// 1등급 나노 수리액(100). 가장 흔한 응급 처치용.
   nanoVial,
 
-  /// 대형 나노 수리액. 체력을 크게 회복하고 장갑을 경화시킨다.
+  /// 2등급 나노 캐니스터(200). 장갑 경화가 함께 걸린다.
   nanoCanister,
+
+  /// 3등급 재생 셀(300).
+  repairCell,
+
+  /// 4등급 재생 앰플(500).
+  regenAmpoule,
+
+  /// 5등급 정비 키트(1000). 좀처럼 나오지 않는다.
+  overhaulKit,
 
   /// 에너지 셀. 에너지를 회복한다.
   energyCell,
@@ -91,23 +100,57 @@ class PickupSpec {
   bool get isPotion => potion != null;
 
   static const Map<PickupKind, PickupSpec> table = {
+    // ── 회복 물약 5등급 ─────────────────────────────────────────────────
+    // 회복량은 100·200·300·500·1000 다섯 뿐이고, 몸체 내구도가 10,000이라
+    // 어느 등급도 판세를 뒤집지 못한다. 의도한 설계다 — 큰 체력 풀로 오래
+    // 버티는 것이 주(主)이고 물약은 곁다리다.
+    // 2등급 이상은 드롭 확률을 크게 낮췄다(`drop_table.dart`).
     PickupKind.nanoVial: PickupSpec(
       name: 'REPAIR VIAL',
-      amount: 22,
+      amount: 100,
       color: GamePalette.healGlow,
       unit: 'HP',
       rarity: LootRarity.common,
       radius: 11,
-      potion: PotionEffect(heal: 45),
+      potion: PotionEffect(heal: 100),
     ),
     PickupKind.nanoCanister: PickupSpec(
       name: 'NANO CANISTER',
-      amount: 60,
+      amount: 200,
+      color: GamePalette.healGlow,
+      unit: 'HP',
+      rarity: LootRarity.uncommon,
+      radius: 12,
+      // 2등급에만 장갑 경화가 딸려 있다. 회복량이 아니라 이 버프가
+      // 이 등급을 고르는 이유다.
+      potion: PotionEffect(heal: 200, buff: BuffKind.fortify),
+    ),
+    PickupKind.repairCell: PickupSpec(
+      name: 'REPAIR CELL',
+      amount: 300,
+      color: GamePalette.healGlow,
+      unit: 'HP',
+      rarity: LootRarity.uncommon,
+      radius: 13,
+      potion: PotionEffect(heal: 300),
+    ),
+    PickupKind.regenAmpoule: PickupSpec(
+      name: 'REGEN AMPOULE',
+      amount: 500,
       color: GamePalette.healGlow,
       unit: 'HP',
       rarity: LootRarity.rare,
-      radius: 14,
-      potion: PotionEffect(heal: 110, buff: BuffKind.fortify),
+      radius: 15,
+      potion: PotionEffect(heal: 500),
+    ),
+    PickupKind.overhaulKit: PickupSpec(
+      name: 'OVERHAUL KIT',
+      amount: 1000,
+      color: GamePalette.healGlow,
+      unit: 'HP',
+      rarity: LootRarity.rare,
+      radius: 17,
+      potion: PotionEffect(heal: 1000),
     ),
     PickupKind.energyCell: PickupSpec(
       name: 'ENERGY CELL',
@@ -134,7 +177,7 @@ class PickupSpec {
       unit: '',
       rarity: LootRarity.rare,
       radius: 12,
-      potion: PotionEffect(heal: 20, energy: 25, buff: BuffKind.strength),
+      potion: PotionEffect(heal: 25, energy: 25, buff: BuffKind.strength),
     ),
     PickupKind.dataChip: PickupSpec(
       name: 'DATA CHIP',
@@ -322,6 +365,9 @@ class Pickup extends IsoEntity {
       switch (kind) {
         PickupKind.nanoVial ||
         PickupKind.nanoCanister ||
+        PickupKind.repairCell ||
+        PickupKind.regenAmpoule ||
+        PickupKind.overhaulKit ||
         PickupKind.combatStim =>
           Sfx.pickupHealth,
         PickupKind.energyCell || PickupKind.overchargeCell => Sfx.pickupEnergy,
@@ -399,10 +445,18 @@ class Pickup extends IsoEntity {
   /// 월드의 [Pickup]과 인벤토리 UI가 같은 그림을 쓰도록 정적 메서드로 둔다.
   static void drawIcon(Canvas canvas, PickupKind kind, Color color) {
     switch (kind) {
+      // 회복 물약은 등급이 오를수록 병이 커진다. 바닥에 떨어진 것만 보고도
+      // 주우러 갈 가치가 있는지 판단할 수 있어야 한다.
       case PickupKind.nanoVial:
-        _drawVial(canvas, color, small: true);
+        _drawVial(canvas, color, scale: 1.0);
       case PickupKind.nanoCanister:
-        _drawVial(canvas, color, small: false);
+        _drawVial(canvas, color, scale: 1.15);
+      case PickupKind.repairCell:
+        _drawVial(canvas, color, scale: 1.3);
+      case PickupKind.regenAmpoule:
+        _drawVial(canvas, color, scale: 1.5);
+      case PickupKind.overhaulKit:
+        _drawVial(canvas, color, scale: 1.75);
       case PickupKind.energyCell:
         _drawCell(canvas, color, small: true);
       case PickupKind.overchargeCell:
@@ -417,8 +471,8 @@ class Pickup extends IsoEntity {
   }
 
   /// 나노 수리액 병. 십자 마크가 붙은 유리병 형태다.
-  static void _drawVial(Canvas canvas, Color color, {required bool small}) {
-    final s = small ? 1.0 : 1.35;
+  static void _drawVial(Canvas canvas, Color color, {double scale = 1.0}) {
+    final s = scale;
     final glass = Paint()..color = const Color(0xFF13301F);
 
     // 병 몸통
@@ -448,8 +502,8 @@ class Pickup extends IsoEntity {
     canvas.drawRect(Rect.fromLTWH(-4 * s, -0.9 * s, 8 * s, 1.8 * s), cross);
     canvas.drawRect(Rect.fromLTWH(-0.9 * s, -4 * s, 1.8 * s, 8 * s), cross);
 
-    // 대형은 눈금을 그어 한눈에 구분되게 한다.
-    if (!small) {
+    // 2등급 이상은 눈금을 그어 한눈에 구분되게 한다.
+    if (s > 1.0) {
       final tick = Paint()
         ..color = Colors.white.withValues(alpha: 0.35)
         ..strokeWidth = 1.2;

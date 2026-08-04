@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:actionrpg/game/entities/cyborg_design.dart';
@@ -7,30 +8,42 @@ import 'package:actionrpg/game/palette.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// 사이보그 프레임 렌더링 결과를 PNG로 뽑아 실루엣을 눈으로 확인한다.
+/// 사이보그 프레임 렌더링을 PNG 로 뽑아 눈으로 검수한다.
 ///
-/// 출력 경로는 환경 변수 `CYBORG_SNAPSHOT_DIR`로 지정하며,
-/// 지정하지 않으면 스냅샷을 저장하지 않고 렌더링이 예외 없이
-/// 끝나는지만 검증한다.
+/// 렌더러는 방향을 양자화하지 않으므로 "N 방향 스프라이트"가 존재하지 않는다.
+/// 여기서 뽑는 각도는 **표본**이며, 회전이 이어지는지 보려면 표본을 촘촘히
+/// 해야 한다. 그래서 8방향이 아니라 16방향을 기본으로 뽑는다.
+///
+/// 축소 내성도 함께 본다. 게임 최소 배율은 0.55(`ActionRpgGame._zoomForSize`)라
+/// 키 108px 캐릭터가 화면에서 약 59px 가 된다 — 이 크기에서 살아남지 못하는
+/// 디테일은 플레이 중에는 없는 것이다.
+///
+/// ```sh
+/// CYBORG_SNAPSHOT_DIR=/tmp/shots flutter test test/cyborg_render_snapshot_test.dart
+/// ```
+/// 환경변수가 없으면 파일을 남기지 않고 렌더링이 예외 없이 끝나는지만 본다.
 void main() {
   final outputDir = Platform.environment['CYBORG_SNAPSHOT_DIR'];
 
-  testWidgets('남성형·여성형 프레임이 예외 없이 렌더링된다', (tester) async {
+  testWidgets('16방향 회전이 예외 없이 렌더링된다', (tester) async {
     // Picture.toImage()는 실제 비동기 이벤트 루프를 필요로 하므로
     // 테스트의 FakeAsync 밖(runAsync)에서 실행해야 데드락에 걸리지 않는다.
     await tester.runAsync(() async {
-      final image = await _renderComparisonSheet();
-      expect(image.width, greaterThan(0));
-      expect(image.height, greaterThan(0));
+      final sheet = await _renderRotationSheet(steps: 16, scale: 1.9);
+      expect(sheet.width, greaterThan(0));
+      await _save(sheet, outputDir, 'cyborg_rotation.png');
 
-      if (outputDir != null) {
-        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-        final file = File('$outputDir/cyborg_frames.png');
-        await file.parent.create(recursive: true);
-        await file.writeAsBytes(bytes!.buffer.asUint8List());
-        // ignore: avoid_print
-        print('스냅샷 저장: ${file.path}');
-      }
+      // 게임 최소 배율. 이 크기에서 실루엣이 읽히는지 본다.
+      final tiny = await _renderRotationSheet(steps: 16, scale: 0.55);
+      await _save(tiny, outputDir, 'cyborg_rotation_min_zoom.png');
+
+      // 보행 위상까지 섞어 다리·팔이 각도별로 어떻게 움직이는지 본다.
+      final walk = await _renderRotationSheet(
+        steps: 8,
+        scale: 1.9,
+        walking: true,
+      );
+      await _save(walk, outputDir, 'cyborg_walk.png');
     });
   });
 
@@ -46,48 +59,51 @@ void main() {
       greaterThan(CyborgDesign.infiltrator.shoulderWidth),
     );
 
-    // 여성형은 어깨보다 골반 대비 허리가 좁아 모래시계 비율을 갖는다.
+    // 여성형은 골반이 허리보다 넓어야 모래시계가 된다.
     final f = CyborgDesign.infiltrator;
     expect(f.waistWidth, lessThan(f.hipWidth));
   });
 }
 
-/// 두 프레임을 정면/뒷면·대기/보행 조합으로 한 장에 그린다.
-Future<ui.Image> _renderComparisonSheet() async {
-  const cellWidth = 220.0;
-  const cellHeight = 300.0;
-  const columns = 4;
-  const rows = 2;
-  const width = cellWidth * columns;
-  const height = cellHeight * rows;
+Future<void> _save(ui.Image image, String? dir, String name) async {
+  if (dir == null) return;
+  final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+  final file = File('$dir/$name');
+  await file.parent.create(recursive: true);
+  await file.writeAsBytes(bytes!.buffer.asUint8List());
+  // ignore: avoid_print
+  print('스냅샷 저장: ${file.path}');
+}
+
+/// 한 바퀴를 [steps]개로 끊어 두 프레임을 나란히 그린다.
+Future<ui.Image> _renderRotationSheet({
+  required int steps,
+  required double scale,
+  bool walking = false,
+}) async {
+  // 배율에 맞춰 칸 크기를 정한다. 축소 시트는 칸도 작아야 실제 크기가 보인다.
+  final cellWidth = (110 * scale).clamp(60.0, 190.0);
+  final cellHeight = (150 * scale).clamp(90.0, 300.0);
+  final width = cellWidth * steps;
+  final height = cellHeight * CyborgDesign.all.length;
 
   final recorder = ui.PictureRecorder();
-  final canvas = Canvas(
-    recorder,
-    const Rect.fromLTWH(0, 0, width, height),
-  );
+  final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, width, height));
 
-  // 배경
   canvas.drawRect(
-    const Rect.fromLTWH(0, 0, width, height),
+    Rect.fromLTWH(0, 0, width, height),
     Paint()..color = GamePalette.voidColor,
   );
 
-  const variants = [
-    (label: '정면 · 대기', back: false, swing: 0.0),
-    (label: '정면 · 보행', back: false, swing: 0.85),
-    (label: '뒷면 · 대기', back: true, swing: 0.0),
-    (label: '뒷면 · 보행', back: true, swing: -0.85),
-  ];
-
-  for (var row = 0; row < rows; row++) {
+  for (var row = 0; row < CyborgDesign.all.length; row++) {
     final design = CyborgDesign.all[row];
-    for (var col = 0; col < columns; col++) {
-      final variant = variants[col];
+    for (var col = 0; col < steps; col++) {
+      final yaw = col * 2 * math.pi / steps;
+      // 보행 위상을 각도마다 어긋나게 줘서 한 시트에서 여러 순간을 본다.
+      final swing = walking ? math.sin(col * 1.7) : 0.0;
       final originX = cellWidth * col + cellWidth / 2;
       final originY = cellHeight * row + cellHeight * 0.88;
 
-      // 셀 구분선
       canvas.drawRect(
         Rect.fromLTWH(cellWidth * col, cellHeight * row, cellWidth, cellHeight),
         Paint()
@@ -96,18 +112,20 @@ Future<ui.Image> _renderComparisonSheet() async {
           ..color = GamePalette.floorGrid.withValues(alpha: 0.5),
       );
 
-      _label(
-        canvas,
-        '${design.codename} · ${variant.label}',
-        Offset(cellWidth * col + 10, cellHeight * row + 10),
-        design.accent,
-      );
+      // 배율이 작으면 라벨이 칸을 잡아먹으므로 큰 시트에만 적는다.
+      if (scale >= 1.0) {
+        _label(
+          canvas,
+          '${(col * 360 / steps).round()}°',
+          Offset(cellWidth * col + 6, cellHeight * row + 6),
+          design.accent,
+        );
+      }
 
       canvas.save();
       canvas.translate(originX, originY);
-      canvas.scale(1.9);
+      canvas.scale(scale);
 
-      // 그림자
       canvas.drawOval(
         Rect.fromCenter(
           center: Offset.zero,
@@ -120,9 +138,11 @@ Future<ui.Image> _renderComparisonSheet() async {
       CyborgRenderer.drawBody(
         canvas,
         design: design,
-        swing: variant.swing,
-        back: variant.back,
-        armSwing: -variant.swing * 6,
+        yaw: yaw,
+        swing: swing,
+        armSwing: -swing * 6,
+        // 맥동 위상을 고정해 두 시트를 비교할 수 있게 한다.
+        time: 0.4,
       );
       canvas.restore();
     }
@@ -136,7 +156,7 @@ void _label(Canvas canvas, String text, Offset at, Color color) {
   final painter = TextPainter(
     text: TextSpan(
       text: text,
-      style: TextStyle(color: color, fontSize: 11),
+      style: TextStyle(color: color, fontSize: 10),
     ),
     textDirection: TextDirection.ltr,
   )..layout();
