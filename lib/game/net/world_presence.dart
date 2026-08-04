@@ -1,0 +1,172 @@
+import 'package:flame/components.dart';
+import 'package:flutter/foundation.dart';
+
+/// 같은 월드에 있는 다른 요원 한 명.
+///
+/// 서버가 보내는 타입을 그대로 쓰지 않고 게임 쪽 표현으로 옮겨 담는다. 그래야
+/// 렌더 코드가 SpacetimeDB 생성 코드를 몰라도 되고, 백엔드가 바뀌어도 화면은
+/// 그대로 남는다.
+class RemotePlayer {
+  RemotePlayer({
+    required this.characterId,
+    required this.name,
+    required this.kind,
+    required this.level,
+    required this.grid,
+    required this.alive,
+    required this.hp,
+    required this.maxHp,
+  });
+
+  /// 캐릭터 식별자. 같은 사람을 프레임마다 다시 찾는 열쇠다.
+  final int characterId;
+
+  final String name;
+
+  /// 캐릭터 외형(`male_cyborg` · `female_cyborg`).
+  final String kind;
+
+  final int level;
+
+  /// 타일 단위의 논리 위치.
+  final Vector2 grid;
+
+  final bool alive;
+
+  /// 남의 체력. **PK 가 허용되므로 이것이 보여야 한다** — 상대가 얼마나 버티는지
+  /// 모르면 덤빌지 물러설지 판단할 수 없고, 몹에게 쫓기는 동료를 알아볼 수도 없다.
+  final int hp;
+  final int maxHp;
+
+  double get hpRatio => maxHp <= 0 ? 0 : (hp / maxHp).clamp(0.0, 1.0);
+}
+
+/// 서버가 확정한 **내** 전투 상태.
+///
+/// 체력·마력·사망은 이제 서버가 정한다. 클라이언트는 이 값을 그리고, 다음 갱신이
+/// 올 때까지의 사이만 예측으로 메운다 — 예측은 화면을 부드럽게 하려는 것이지
+/// 판정이 아니다. 그래서 여기 값과 어긋나면 **언제나 여기가 맞다.**
+class MyWorldState {
+  const MyWorldState({
+    required this.grid,
+    required this.hp,
+    required this.maxHp,
+    required this.mp,
+    required this.maxMp,
+    required this.alive,
+    required this.deaths,
+  });
+
+  /// 서버가 확정한 내 좌표. 예측 위치를 여기로 수렴시킨다.
+  final Vector2 grid;
+
+  final int hp;
+  final int maxHp;
+  final int mp;
+  final int maxMp;
+  final bool alive;
+
+  /// 지금까지 쓰러진 횟수.
+  ///
+  /// 사망은 상태가 아니라 **사건**이다 — 쓰러지면 곧바로 안전지대에서 다시
+  /// 일어서므로 `alive` 가 내려가 있는 순간을 구독으로 보리라 기대할 수 없다.
+  /// 이 수가 **오르는 것**을 보고 사망 연출을 시작한다.
+  final int deaths;
+}
+
+/// 서버가 관리하는 몬스터 한 기.
+///
+/// **이 값이 진실이다.** 클라이언트가 따로 만들어 낸 몹은 없다 — 있으면 A 가
+/// 잡은 몹이 B 화면에 살아 있게 되고, 그 순간 파티도 협업 레이드도 성립하지
+/// 않는다.
+class ServerMonster {
+  ServerMonster({
+    required this.id,
+    required this.level,
+    required this.grid,
+    required this.hp,
+    required this.maxHp,
+    required this.alive,
+    required this.taggedByMe,
+  });
+
+  /// 서버가 부여한 번호. 공격할 때 이 값을 보낸다.
+  final int id;
+
+  /// 1~200. 클라이언트 도감이 이 값으로 종과 생김새를 찾는다.
+  final int level;
+
+  final Vector2 grid;
+  final int hp;
+  final int maxHp;
+  final bool alive;
+
+  /// 내가 선점한 몹인지. 크레딧이 나에게 오는지를 화면에 표시하는 데 쓴다.
+  final bool taggedByMe;
+
+  double get hpRatio => maxHp <= 0 ? 0 : (hp / maxHp).clamp(0.0, 1.0);
+}
+
+/// 월드에 누가 함께 있는지 알려 주고, 내 위치를 알리는 창구.
+///
+/// 게임은 이 인터페이스만 알고 있으므로 서버에 붙지 않아도 그대로 돌아간다 —
+/// 그때는 [isAvailable] 이 false 이고 [others] 가 비어 있을 뿐이다. 혼자
+/// 플레이하는 것과 아무도 접속하지 않은 월드는 화면에서 같은 모습이다.
+abstract class WorldPresence {
+  const WorldPresence();
+
+  /// 월드에 들어간다. 게임을 시작할 때 한 번 부른다.
+  ///
+  /// [grid] 는 **내 몸이 실제로 선 자리**다. 이걸 넘기지 않으면 서버가 임의의
+  /// 지점(월드 중심)에 나를 세우고, 그 어긋남은 속도 상한 때문에 몇 초에 걸쳐
+  /// 천천히 좁혀진다 — 그동안 남의 화면에서 나는 엉뚱한 곳에 있거나 보이지도
+  /// 않는다.
+  Future<void> enter(Vector2 grid) async {}
+
+  /// 월드에서 나온다. 게임을 접을 때 부른다.
+  void leave() {}
+
+  /// 내 위치를 알린다. 매 프레임 불러도 되며, 실제 전송 빈도는 구현이 정한다.
+  void report(Vector2 grid) {}
+
+  /// 나를 뺀 다른 요원들. 서버에 붙지 않았으면 빈 목록이다.
+  List<RemotePlayer> get others => const [];
+
+  /// 서버가 관리하는 몬스터. 서버에 붙지 않았으면 빈 목록이다.
+  List<ServerMonster> get monsters => const [];
+
+  /// 몬스터를 때린다. 사거리·쿨다운·선점·보상은 **전부 서버가 판정한다.**
+  ///
+  /// 클라이언트는 "누구를 때리려 했는가" 만 말하고, 그 결과는 표가 바뀌는 것으로
+  /// 돌아온다. 여기서 체력을 미리 깎아 두면 서버가 거절했을 때 화면과 서버가
+  /// 어긋나고, 그 어긋남은 "분명히 때렸는데 안 죽는" 형태로 나타난다.
+  void attack(int monsterId) {}
+
+  /// 스킬을 쓴다. **마력·쿨다운·사거리·피해를 전부 서버가 정한다.**
+  ///
+  /// 마력을 여기서 미리 깎지 않는다 — 서버가 거절하면 쓰지도 않은 마력이 사라진다.
+  void castSkill(String skillId, int monsterId) {}
+
+  /// 다른 요원을 때린다(PK). 안전지대 면역·사거리·쿨다운은 서버가 본다.
+  void attackPlayer(int targetCharacterId) {}
+
+  /// 서버가 확정한 내 전투 상태. 월드에 들어가 있지 않으면 `null`.
+  MyWorldState? get me => null;
+
+  /// 다른 요원의 목록이나 위치가 바뀔 때 알리는 신호.
+  Listenable get changes;
+
+  /// 월드에 연결되어 있는지.
+  bool get isAvailable => false;
+}
+
+/// 서버가 없을 때 쓰는 빈 구현.
+class OfflineWorldPresence extends WorldPresence {
+  const OfflineWorldPresence();
+
+  @override
+  Listenable get changes => _never;
+
+  /// 영영 바뀌지 않으므로 아무에게도 알리지 않는 신호를 준다.
+  static final Listenable _never = Listenable.merge(const []);
+}

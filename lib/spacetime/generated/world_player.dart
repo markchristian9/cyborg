@@ -18,6 +18,13 @@ class WorldPlayer {
     required this.lastMoveAt,
     required this.enteredAt,
     required this.nextTeleportAt,
+    required this.nextHurtAt,
+    required this.mp,
+    required this.maxMp,
+    required this.defense,
+    required this.deaths,
+    required this.invulnerableUntil,
+    required this.lastDamagedAt,
   });
 
   factory WorldPlayer.fromJson(Map<String, dynamic> json) {
@@ -36,6 +43,13 @@ class WorldPlayer {
       lastMoveAt: Int64(json['lastMoveAt'] ?? 0),
       enteredAt: Int64(json['enteredAt'] ?? 0),
       nextTeleportAt: Int64(json['nextTeleportAt'] ?? 0),
+      nextHurtAt: Int64(json['nextHurtAt'] ?? 0),
+      mp: json['mp'] ?? 0,
+      maxMp: json['maxMp'] ?? 0,
+      defense: json['defense'] ?? 0,
+      deaths: json['deaths'] ?? 0,
+      invulnerableUntil: Int64(json['invulnerableUntil'] ?? 0),
+      lastDamagedAt: Int64(json['lastDamagedAt'] ?? 0),
     );
   }
 
@@ -67,6 +81,20 @@ class WorldPlayer {
 
   final Int64 nextTeleportAt;
 
+  final Int64 nextHurtAt;
+
+  final int mp;
+
+  final int maxMp;
+
+  final int defense;
+
+  final int deaths;
+
+  final Int64 invulnerableUntil;
+
+  final Int64 lastDamagedAt;
+
   void encodeBsatn(BsatnEncoder encoder) {
     encoder.writeIdentity(identity);
     encoder.writeU64(characterId);
@@ -82,6 +110,13 @@ class WorldPlayer {
     encoder.writeI64(lastMoveAt);
     encoder.writeI64(enteredAt);
     encoder.writeI64(nextTeleportAt);
+    encoder.writeI64(nextHurtAt);
+    encoder.writeI32(mp);
+    encoder.writeI32(maxMp);
+    encoder.writeI32(defense);
+    encoder.writeU32(deaths);
+    encoder.writeI64(invulnerableUntil);
+    encoder.writeI64(lastDamagedAt);
   }
 
   static WorldPlayer decodeBsatn(BsatnDecoder decoder) {
@@ -100,6 +135,13 @@ class WorldPlayer {
       lastMoveAt: decoder.readI64(),
       enteredAt: decoder.readI64(),
       nextTeleportAt: decoder.readI64(),
+      nextHurtAt: decoder.readI64(),
+      mp: decoder.readI32(),
+      maxMp: decoder.readI32(),
+      defense: decoder.readI32(),
+      deaths: decoder.readU32(),
+      invulnerableUntil: decoder.readI64(),
+      lastDamagedAt: decoder.readI64(),
     );
   }
 
@@ -119,6 +161,13 @@ class WorldPlayer {
       'lastMoveAt': lastMoveAt.toInt(),
       'enteredAt': enteredAt.toInt(),
       'nextTeleportAt': nextTeleportAt.toInt(),
+      'nextHurtAt': nextHurtAt.toInt(),
+      'mp': mp,
+      'maxMp': maxMp,
+      'defense': defense,
+      'deaths': deaths,
+      'invulnerableUntil': invulnerableUntil.toInt(),
+      'lastDamagedAt': lastDamagedAt.toInt(),
     };
   }
 
@@ -139,7 +188,14 @@ class WorldPlayer {
             nextAttackAt == other.nextAttackAt &&
             lastMoveAt == other.lastMoveAt &&
             enteredAt == other.enteredAt &&
-            nextTeleportAt == other.nextTeleportAt;
+            nextTeleportAt == other.nextTeleportAt &&
+            nextHurtAt == other.nextHurtAt &&
+            mp == other.mp &&
+            maxMp == other.maxMp &&
+            defense == other.defense &&
+            deaths == other.deaths &&
+            invulnerableUntil == other.invulnerableUntil &&
+            lastDamagedAt == other.lastDamagedAt;
   }
 
   @override
@@ -159,12 +215,19 @@ class WorldPlayer {
       lastMoveAt,
       enteredAt,
       nextTeleportAt,
+      nextHurtAt,
+      mp,
+      maxMp,
+      defense,
+      deaths,
+      invulnerableUntil,
+      lastDamagedAt,
     ]);
   }
 
   @override
   String toString() {
-    return 'WorldPlayer(identity: $identity, characterId: $characterId, name: $name, kind: $kind, level: $level, gridX: $gridX, gridY: $gridY, hp: $hp, maxHp: $maxHp, alive: $alive, nextAttackAt: $nextAttackAt, lastMoveAt: $lastMoveAt, enteredAt: $enteredAt, nextTeleportAt: $nextTeleportAt)';
+    return 'WorldPlayer(identity: $identity, characterId: $characterId, name: $name, kind: $kind, level: $level, gridX: $gridX, gridY: $gridY, hp: $hp, maxHp: $maxHp, alive: $alive, nextAttackAt: $nextAttackAt, lastMoveAt: $lastMoveAt, enteredAt: $enteredAt, nextTeleportAt: $nextTeleportAt, nextHurtAt: $nextHurtAt, mp: $mp, maxMp: $maxMp, defense: $defense, deaths: $deaths, invulnerableUntil: $invulnerableUntil, lastDamagedAt: $lastDamagedAt)';
   }
 
   WorldPlayer copyWith({
@@ -182,6 +245,13 @@ class WorldPlayer {
     Int64? lastMoveAt,
     Int64? enteredAt,
     Int64? nextTeleportAt,
+    Int64? nextHurtAt,
+    int? mp,
+    int? maxMp,
+    int? defense,
+    int? deaths,
+    Int64? invulnerableUntil,
+    Int64? lastDamagedAt,
   }) {
     return WorldPlayer(
       identity: identity ?? this.identity,
@@ -198,6 +268,13 @@ class WorldPlayer {
       lastMoveAt: lastMoveAt ?? this.lastMoveAt,
       enteredAt: enteredAt ?? this.enteredAt,
       nextTeleportAt: nextTeleportAt ?? this.nextTeleportAt,
+      nextHurtAt: nextHurtAt ?? this.nextHurtAt,
+      mp: mp ?? this.mp,
+      maxMp: maxMp ?? this.maxMp,
+      defense: defense ?? this.defense,
+      deaths: deaths ?? this.deaths,
+      invulnerableUntil: invulnerableUntil ?? this.invulnerableUntil,
+      lastDamagedAt: lastDamagedAt ?? this.lastDamagedAt,
     );
   }
 }

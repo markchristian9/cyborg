@@ -2,6 +2,22 @@
 
 import 'package:spacetimedb_sdk/codegen.dart';
 
+class AcceptInviteArgs {
+  AcceptInviteArgs({required this.inviteId});
+
+  final Int64 inviteId;
+}
+
+class AcceptInviteArgsDecoder implements ReducerArgDecoder<AcceptInviteArgs> {
+  const AcceptInviteArgsDecoder();
+
+  @override
+  AcceptInviteArgs decode(BsatnDecoder decoder) {
+    final inviteId = decoder.readU64();
+    return AcceptInviteArgs(inviteId: inviteId);
+  }
+}
+
 class AttackMonsterArgs {
   AttackMonsterArgs({required this.monsterId});
 
@@ -15,6 +31,41 @@ class AttackMonsterArgsDecoder implements ReducerArgDecoder<AttackMonsterArgs> {
   AttackMonsterArgs decode(BsatnDecoder decoder) {
     final monsterId = decoder.readU64();
     return AttackMonsterArgs(monsterId: monsterId);
+  }
+}
+
+class AttackPlayerArgs {
+  AttackPlayerArgs({required this.targetCharacterId});
+
+  final Int64 targetCharacterId;
+}
+
+class AttackPlayerArgsDecoder implements ReducerArgDecoder<AttackPlayerArgs> {
+  const AttackPlayerArgsDecoder();
+
+  @override
+  AttackPlayerArgs decode(BsatnDecoder decoder) {
+    final targetCharacterId = decoder.readU64();
+    return AttackPlayerArgs(targetCharacterId: targetCharacterId);
+  }
+}
+
+class CastSkillArgs {
+  CastSkillArgs({required this.skillId, required this.monsterId});
+
+  final String skillId;
+
+  final Int64 monsterId;
+}
+
+class CastSkillArgsDecoder implements ReducerArgDecoder<CastSkillArgs> {
+  const CastSkillArgsDecoder();
+
+  @override
+  CastSkillArgs decode(BsatnDecoder decoder) {
+    final skillId = decoder.readString();
+    final monsterId = decoder.readU64();
+    return CastSkillArgs(skillId: skillId, monsterId: monsterId);
   }
 }
 
@@ -64,6 +115,35 @@ class CreateCharacterArgsDecoder
   }
 }
 
+class CreatePartyArgs {
+  CreatePartyArgs();
+}
+
+class CreatePartyArgsDecoder implements ReducerArgDecoder<CreatePartyArgs> {
+  const CreatePartyArgsDecoder();
+
+  @override
+  CreatePartyArgs decode(BsatnDecoder decoder) {
+    return CreatePartyArgs();
+  }
+}
+
+class DeclineInviteArgs {
+  DeclineInviteArgs({required this.inviteId});
+
+  final Int64 inviteId;
+}
+
+class DeclineInviteArgsDecoder implements ReducerArgDecoder<DeclineInviteArgs> {
+  const DeclineInviteArgsDecoder();
+
+  @override
+  DeclineInviteArgs decode(BsatnDecoder decoder) {
+    final inviteId = decoder.readU64();
+    return DeclineInviteArgs(inviteId: inviteId);
+  }
+}
+
 class DeleteCharacterArgs {
   DeleteCharacterArgs({required this.characterId});
 
@@ -78,6 +158,19 @@ class DeleteCharacterArgsDecoder
   DeleteCharacterArgs decode(BsatnDecoder decoder) {
     final characterId = decoder.readU64();
     return DeleteCharacterArgs(characterId: characterId);
+  }
+}
+
+class DisbandPartyArgs {
+  DisbandPartyArgs();
+}
+
+class DisbandPartyArgsDecoder implements ReducerArgDecoder<DisbandPartyArgs> {
+  const DisbandPartyArgsDecoder();
+
+  @override
+  DisbandPartyArgs decode(BsatnDecoder decoder) {
+    return DisbandPartyArgs();
   }
 }
 
@@ -96,7 +189,11 @@ class EnsureWorldPopulatedArgsDecoder
 }
 
 class EnterWorldArgs {
-  EnterWorldArgs();
+  EnterWorldArgs({required this.gridX, required this.gridY});
+
+  final double gridX;
+
+  final double gridY;
 }
 
 class EnterWorldArgsDecoder implements ReducerArgDecoder<EnterWorldArgs> {
@@ -104,7 +201,54 @@ class EnterWorldArgsDecoder implements ReducerArgDecoder<EnterWorldArgs> {
 
   @override
   EnterWorldArgs decode(BsatnDecoder decoder) {
-    return EnterWorldArgs();
+    final gridX = decoder.readF32();
+    final gridY = decoder.readF32();
+    return EnterWorldArgs(gridX: gridX, gridY: gridY);
+  }
+}
+
+class InviteToPartyArgs {
+  InviteToPartyArgs({required this.targetCharacterId});
+
+  final Int64 targetCharacterId;
+}
+
+class InviteToPartyArgsDecoder implements ReducerArgDecoder<InviteToPartyArgs> {
+  const InviteToPartyArgsDecoder();
+
+  @override
+  InviteToPartyArgs decode(BsatnDecoder decoder) {
+    final targetCharacterId = decoder.readU64();
+    return InviteToPartyArgs(targetCharacterId: targetCharacterId);
+  }
+}
+
+class KickMemberArgs {
+  KickMemberArgs({required this.targetCharacterId});
+
+  final Int64 targetCharacterId;
+}
+
+class KickMemberArgsDecoder implements ReducerArgDecoder<KickMemberArgs> {
+  const KickMemberArgsDecoder();
+
+  @override
+  KickMemberArgs decode(BsatnDecoder decoder) {
+    final targetCharacterId = decoder.readU64();
+    return KickMemberArgs(targetCharacterId: targetCharacterId);
+  }
+}
+
+class LeavePartyArgs {
+  LeavePartyArgs();
+}
+
+class LeavePartyArgsDecoder implements ReducerArgDecoder<LeavePartyArgs> {
+  const LeavePartyArgsDecoder();
+
+  @override
+  LeavePartyArgs decode(BsatnDecoder decoder) {
+    return LeavePartyArgs();
   }
 }
 
@@ -172,6 +316,36 @@ class MoveToArgsDecoder implements ReducerArgDecoder<MoveToArgs> {
   }
 }
 
+class PromoteLeaderArgs {
+  PromoteLeaderArgs({required this.targetCharacterId});
+
+  final Int64 targetCharacterId;
+}
+
+class PromoteLeaderArgsDecoder implements ReducerArgDecoder<PromoteLeaderArgs> {
+  const PromoteLeaderArgsDecoder();
+
+  @override
+  PromoteLeaderArgs decode(BsatnDecoder decoder) {
+    final targetCharacterId = decoder.readU64();
+    return PromoteLeaderArgs(targetCharacterId: targetCharacterId);
+  }
+}
+
+class RebuildMonstersArgs {
+  RebuildMonstersArgs();
+}
+
+class RebuildMonstersArgsDecoder
+    implements ReducerArgDecoder<RebuildMonstersArgs> {
+  const RebuildMonstersArgsDecoder();
+
+  @override
+  RebuildMonstersArgs decode(BsatnDecoder decoder) {
+    return RebuildMonstersArgs();
+  }
+}
+
 class RegisterAccountArgs {
   RegisterAccountArgs({required this.email, required this.password});
 
@@ -226,6 +400,22 @@ class SelectCharacterArgsDecoder
   }
 }
 
+class SetFollowingArgs {
+  SetFollowingArgs({required this.following});
+
+  final bool following;
+}
+
+class SetFollowingArgsDecoder implements ReducerArgDecoder<SetFollowingArgs> {
+  const SetFollowingArgsDecoder();
+
+  @override
+  SetFollowingArgs decode(BsatnDecoder decoder) {
+    final following = decoder.readBool();
+    return SetFollowingArgs(following: following);
+  }
+}
+
 class TeleportToArgs {
   TeleportToArgs({
     required this.destination,
@@ -252,9 +442,21 @@ class TeleportToArgsDecoder implements ReducerArgDecoder<TeleportToArgs> {
   }
 }
 
+const acceptInviteDef = ReducerDef<AcceptInviteArgs>(
+  'accept_invite',
+  AcceptInviteArgsDecoder(),
+);
 const attackMonsterDef = ReducerDef<AttackMonsterArgs>(
   'attack_monster',
   AttackMonsterArgsDecoder(),
+);
+const attackPlayerDef = ReducerDef<AttackPlayerArgs>(
+  'attack_player',
+  AttackPlayerArgsDecoder(),
+);
+const castSkillDef = ReducerDef<CastSkillArgs>(
+  'cast_skill',
+  CastSkillArgsDecoder(),
 );
 const changePasswordDef = ReducerDef<ChangePasswordArgs>(
   'change_password',
@@ -264,9 +466,21 @@ const createCharacterDef = ReducerDef<CreateCharacterArgs>(
   'create_character',
   CreateCharacterArgsDecoder(),
 );
+const createPartyDef = ReducerDef<CreatePartyArgs>(
+  'create_party',
+  CreatePartyArgsDecoder(),
+);
+const declineInviteDef = ReducerDef<DeclineInviteArgs>(
+  'decline_invite',
+  DeclineInviteArgsDecoder(),
+);
 const deleteCharacterDef = ReducerDef<DeleteCharacterArgs>(
   'delete_character',
   DeleteCharacterArgsDecoder(),
+);
+const disbandPartyDef = ReducerDef<DisbandPartyArgs>(
+  'disband_party',
+  DisbandPartyArgsDecoder(),
 );
 const ensureWorldPopulatedDef = ReducerDef<EnsureWorldPopulatedArgs>(
   'ensure_world_populated',
@@ -276,6 +490,18 @@ const enterWorldDef = ReducerDef<EnterWorldArgs>(
   'enter_world',
   EnterWorldArgsDecoder(),
 );
+const inviteToPartyDef = ReducerDef<InviteToPartyArgs>(
+  'invite_to_party',
+  InviteToPartyArgsDecoder(),
+);
+const kickMemberDef = ReducerDef<KickMemberArgs>(
+  'kick_member',
+  KickMemberArgsDecoder(),
+);
+const leavePartyDef = ReducerDef<LeavePartyArgs>(
+  'leave_party',
+  LeavePartyArgsDecoder(),
+);
 const leaveWorldDef = ReducerDef<LeaveWorldArgs>(
   'leave_world',
   LeaveWorldArgsDecoder(),
@@ -283,6 +509,14 @@ const leaveWorldDef = ReducerDef<LeaveWorldArgs>(
 const loginDef = ReducerDef<LoginArgs>('login', LoginArgsDecoder());
 const logoutDef = ReducerDef<LogoutArgs>('logout', LogoutArgsDecoder());
 const moveToDef = ReducerDef<MoveToArgs>('move_to', MoveToArgsDecoder());
+const promoteLeaderDef = ReducerDef<PromoteLeaderArgs>(
+  'promote_leader',
+  PromoteLeaderArgsDecoder(),
+);
+const rebuildMonstersDef = ReducerDef<RebuildMonstersArgs>(
+  'rebuild_monsters',
+  RebuildMonstersArgsDecoder(),
+);
 const registerAccountDef = ReducerDef<RegisterAccountArgs>(
   'register_account',
   RegisterAccountArgsDecoder(),
@@ -294,6 +528,10 @@ const reportProgressDef = ReducerDef<ReportProgressArgs>(
 const selectCharacterDef = ReducerDef<SelectCharacterArgs>(
   'select_character',
   SelectCharacterArgsDecoder(),
+);
+const setFollowingDef = ReducerDef<SetFollowingArgs>(
+  'set_following',
+  SetFollowingArgsDecoder(),
 );
 const teleportToDef = ReducerDef<TeleportToArgs>(
   'teleport_to',

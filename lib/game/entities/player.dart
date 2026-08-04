@@ -15,6 +15,7 @@ import '../systems/level_system.dart';
 import '../systems/rest_recovery.dart';
 import 'cyborg_design.dart';
 import 'cyborg_renderer.dart';
+import 'enemy.dart';
 import 'iso_entity.dart';
 import 'pickup.dart';
 import 'projectile.dart';
@@ -200,23 +201,53 @@ class Player extends IsoEntity with Damageable {
   ///
   /// 1레벨 마력 5,000으로 약 83발을 쏠 수 있다. 사냥 한 바퀴를 넉넉히
   /// 돌 만큼이되, 무한정 난사하면 거점으로 돌아가 쉬어야 한다.
+  ///
+  /// 서버 `SKILL_PLASMA.mp_cost` 와 같아야 한다 — 실제로 마력을 깎는 것은
+  /// 서버이고, 이 값은 "쏠 수 있는가" 를 미리 가려 헛손질을 줄이는 데만 쓴다.
   static const double plasmaMpCost = 60;
 
+  /// 서버가 아는 플라즈마 스킬의 이름. 서버 `skill_spec` 의 열쇠다.
+  static const String plasmaSkillId = 'plasma';
+
   /// 플라즈마 볼트를 발사한다. 마력을 쓴다.
-  void tryShoot() {
+  ///
+  /// **마력을 깎고 피해를 넣는 것은 서버다.** 여기서 하는 일은 쏘는 시늉과
+  /// 서버에 의도를 알리는 것뿐이다. 화면의 발사체는 연출이며, 그것이 몹에
+  /// 닿았는지는 아무것도 결정하지 않는다 — 판정은 서버가 자기 좌표로 이미 했다.
+  ///
+  /// 대상을 [target] 으로 받는 이유는 서버가 "누구를 쏘았는가" 를 알아야 하기
+  /// 때문이다. 서버는 발사체를 시뮬레이션하지 않는다(고주파 틱이 필요하고 그
+  /// 비용이 지금 얻는 것보다 크다). 대상이 없으면 연출만 나가고 판정은 없다.
+  void tryShoot({Enemy? target}) {
     if (!isAlive || _shootCooldown > 0) return;
     if (mp < plasmaMpCost) {
       GameAudio.play(Sfx.uiError);
       return;
     }
     _shootCooldown = 0.24;
-    mp -= plasmaMpCost;
+
+    // 대상을 지목하지 않았으면 바라보는 쪽에서 찾는다. 조준은 조작 편의이고,
+    // 사거리·명중 여부는 어차피 서버가 자기 좌표로 다시 본다.
+    final monsterId = (target ?? _aimTarget())?.serverId;
+    if (monsterId != null) {
+      // 서버가 마력·쿨다운·사거리·피해를 판정한다. 거절당하면 마력은 줄지 않고,
+      // 화면의 마력 바는 다음 갱신에서 제자리로 돌아온다.
+      game.presence.castSkill(plasmaSkillId, monsterId);
+    }
+
+    // 서버 답이 오기 전까지의 표시용 예측. 다음 갱신이 서버 값으로 덮는다.
+    // 이걸 빼면 연타할 때 마력 바가 한 박자 늦게 줄어 "쐈는데 안 줄었다" 로 보인다.
+    mp = math.max(0, mp - plasmaMpCost);
+
     final dir = facing.clone()..normalize();
     game.spawnProjectile(
       Projectile(
         grid: grid + dir * 0.4,
         direction: dir,
         speed: 9.5,
+        // 서버가 판정하는 동안 화면에서만 도는 연출이다. 서버에 붙어 있으면
+        // 이 값으로 몹의 체력이 깎이지 않는다(`Projectile` 이 서버 몹을 건드리지
+        // 않는다). 오프라인 모드에서는 이것이 유일한 피해다.
         damage: effectiveRangedDamage,
         owner: ProjectileOwner.player,
         z: 0.62,
@@ -225,6 +256,31 @@ class Player extends IsoEntity with Damageable {
     game.shakeCamera(2.5, 0.08);
     GameAudio.play(Sfx.plasmaShot);
   }
+
+  /// 플라즈마가 날아갈 쪽에서 대상을 고른다.
+  ///
+  /// 바라보는 반쪽(내적이 양수) 안에서 가장 가까운 서버 몹을 집는다. 등 뒤의
+  /// 적이 잡히면 총구는 앞을 보는데 뒤가 죽어 화면과 판정이 어긋나 보인다.
+  Enemy? _aimTarget() {
+    final aim = facing.length2 > 0.0001 ? facing.normalized() : Vector2(1, 0);
+    Enemy? best;
+    var bestDistance = plasmaAimRange;
+
+    for (final enemy in game.enemies) {
+      if (!enemy.isAlive || enemy.serverId == null) continue;
+      final to = enemy.grid - grid;
+      final distance = to.length;
+      if (distance > bestDistance) continue;
+      // 정면 반쪽 밖은 거른다.
+      if (distance > 0.001 && to.normalized().dot(aim) < 0) continue;
+      best = enemy;
+      bestDistance = distance;
+    }
+    return best;
+  }
+
+  /// 조준이 닿는 거리(타일). 서버 `SKILL_PLASMA.range_tiles` 와 같아야 한다.
+  static const double plasmaAimRange = 10;
 
   /// 회피 대시를 시도한다.
   void tryDash() {
@@ -281,6 +337,13 @@ class Player extends IsoEntity with Damageable {
   ///
   /// 지금 거점은 월드 한가운데의 안전지대뿐이다. 아지트가 생기면
   /// 판정만 넓히면 되고 회복 규칙은 그대로 쓴다.
+  ///
+  /// **월드에 접속해 있으면 실제 회복은 서버가 한다**(`regen_tick`). 여기서
+  /// 채우는 값은 서버 갱신 사이를 메우는 예측일 뿐이고, 다음 갱신이 오면
+  /// 서버 값으로 덮인다. 그런데도 계속 굴리는 이유는 회복 표시(`isRecovering`)와
+  /// 피격 대기(`notifyDamaged`)가 화면에 필요하기 때문이다.
+  ///
+  /// 서버에 붙지 않은 오프라인·프리뷰 모드에서는 이 계산이 유일한 회복이다.
   void _updateRest(double dt) {
     rest.update(dt, sheltered: game.map.safeZone.containsPoint(grid));
 
@@ -674,6 +737,76 @@ class Player extends IsoEntity with Damageable {
 
     syncTransform();
   }
+
+  // ── 서버 권위 ───────────────────────────────────────────────────────
+  //
+  // 체력·마력·사망·좌표의 진실은 서버에 있다. 아래 두 메서드가 그 진실을 몸에
+  // 옮겨 담는 유일한 통로이며, 여기를 거치지 않은 값은 화면을 위한 예측일 뿐이다.
+
+  /// 서버가 확정한 체력·마력을 받아들인다.
+  ///
+  /// 예측으로 벌어진 차이를 **즉시** 맞춘다 — 체력은 부드럽게 수렴시킬 값이
+  /// 아니다. 서버가 "너는 3,200 이다" 라고 하면 화면도 3,200 이어야 하고,
+  /// 그 사이를 lerp 로 메우면 이미 죽은 몸이 잠깐 살아 있는 것으로 보인다.
+  void adoptServerVitals({
+    required int hp,
+    required int maxHp,
+    required int mp,
+    required int maxMp,
+  }) {
+    _maxHp = maxHp.toDouble();
+    _hp = hp.toDouble().clamp(0, _maxHp);
+    _maxMp = maxMp.toDouble();
+    this.mp = mp.toDouble().clamp(0, _maxMp);
+  }
+
+  /// 서버가 확정한 좌표로 예측 위치를 끌어당긴다.
+  ///
+  /// 라리엔의 적응형 보정과 같은 방식이다 — 오차 크기에 따라 당기는 세기를
+  /// 바꾼다. 고정 계수를 쓰면 둘 중 하나가 반드시 깨진다: 세게 당기면 평소
+  /// 이동이 뒤로 밀려 조작감이 무너지고(rubber-band), 약하게 당기면 텔레포트나
+  /// 패킷 유실 뒤에 영영 어긋난 채로 남는다.
+  ///
+  /// [dt] 는 이번 프레임의 시간이다. 프레임률이 달라도 같은 속도로 수렴하도록
+  /// 계수를 시간으로 환산한다.
+  void reconcileServerGrid(Vector2 serverGrid, double dt) {
+    final error = serverGrid.distanceTo(grid);
+    if (error < _reconcileDeadzone) return;
+
+    // 크게 어긋났으면 보정이 아니라 순간이동이다. 텔레포트·재가동·긴 끊김이
+    // 여기 걸리며, 이때 천천히 걸어가면 그 사이 남의 화면 속 나와 내 화면 속
+    // 내가 다른 곳에 있다.
+    if (error > _reconcileSnapDistance) {
+      grid.setFrom(serverGrid);
+      clearMoveTarget();
+      syncTransform();
+      return;
+    }
+
+    // 그 외에는 부드럽게 당긴다. 오차가 클수록 세게 당겨, 평소 이동은
+    // 건드리지 않으면서 벌어진 차이는 확실히 좁힌다.
+    final strength = error > _reconcileHardError
+        ? _reconcileHardRate
+        : _reconcileSoftRate;
+    final t = (1 - math.exp(-strength * dt)).clamp(0.0, 1.0);
+    grid.setValues(
+      grid.x + (serverGrid.x - grid.x) * t,
+      grid.y + (serverGrid.y - grid.y) * t,
+    );
+  }
+
+  /// 이보다 작은 오차는 무시한다. 늘 조금은 어긋나 있고, 그때마다 당기면 떨린다.
+  static const double _reconcileDeadzone = 0.12;
+
+  /// 이보다 크게 어긋나면 보정 대신 즉시 맞춘다(타일).
+  static const double _reconcileSnapDistance = 24;
+
+  /// 이보다 크면 세게 당긴다(타일).
+  static const double _reconcileHardError = 2.5;
+
+  /// 초당 수렴 계수. 값이 클수록 빨리 붙는다.
+  static const double _reconcileSoftRate = 2.0;
+  static const double _reconcileHardRate = 8.0;
 
   /// 체력을 회복하고 실제로 채워진 양을 돌려준다.
   ///

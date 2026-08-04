@@ -129,6 +129,34 @@ const RESPAWN_MICROS: i64 = 20_000_000;
 /// 몬스터 정비(리스폰) 주기(초).
 const MONSTER_TICK_SECS: u64 = 5;
 
+/// 몬스터 AI 주기(밀리초).
+///
+/// 짧을수록 추격이 매끄럽지만 그만큼 트랜잭션이 늘어난다. 0.3 초면 몹이
+/// 한 번에 0.5 타일 남짓 움직이고, 클라이언트가 그 사이를 보간해 걸어오는
+/// 것처럼 보인다.
+const MONSTER_AI_MILLIS: u64 = 300;
+
+/// 몬스터가 플레이어를 알아채는 거리(타일).
+///
+/// 클라이언트 `kAggroMaxMeters` 와 같은 자릿수다. 서버가 판정의 주인이므로
+/// 실제로 쫓아올지는 이 값이 정한다.
+const MONSTER_AGGRO_TILES: f32 = 9.0;
+
+/// 이 거리를 벗어나면 추격을 포기하고 제자리로 돌아간다.
+///
+/// 어그로 범위와 같게 두면 경계에서 쫓아왔다 돌아섰다를 반복한다.
+const MONSTER_LEASH_TILES: f32 = 16.0;
+
+/// 집에서 이만큼 멀어지면 무조건 돌아간다. 몹이 월드를 가로질러 끌려다니는
+/// 것을 막는다.
+const MONSTER_MAX_ROAM_TILES: f32 = 26.0;
+
+/// 몬스터 이동 속도(타일/초). 플레이어(3.6)보다 느려 도망칠 여지를 남긴다.
+const MONSTER_SPEED: f32 = 2.4;
+
+/// 몬스터가 플레이어를 때리는 간격(마이크로초). 1.2 초.
+const MONSTER_ATTACK_COOLDOWN_MICROS: i64 = 1_200_000;
+
 /// 이동 보고가 허용하는 최대 속도(타일/초).
 ///
 /// 클라이언트가 좌표를 보내고 서버는 **속도 상한만** 본다. 완전한 서버 이동
@@ -138,8 +166,77 @@ const MONSTER_TICK_SECS: u64 = 5;
 /// 미세한 속도 조작이 아니다.
 const MAX_MOVE_SPEED: f32 = 14.0;
 
-/// 월드 입장 시 체력. 레벨에 따라 [`max_hp_for_level`] 이 늘려 준다.
-const BASE_MAX_HP: i32 = 100;
+// ── 전투 수치 (클라이언트와 같은 정본) ──────────────────────────────────
+//
+// 🛑 **여기가 전투 수치의 단일 진실 공급원이다.** 서버가 판정의 주인이므로 이 값이
+// 정본이고, 클라이언트의 같은 상수는 표시·예측용 사본이다. 한쪽만 바꾸면 화면과
+// 판정이 갈라져 "분명히 맞았는데 안 죽는" 상태가 된다.
+//
+// 대응하는 클라이언트 위치:
+//   BASE_MAX_HP / HP_PER_LEVEL  → `Player.baseMaxHp` · `LevelGains.maxHp`
+//   BASE_MAX_MP / MP_PER_LEVEL  → `Player.mp` 초기값 · `LevelGains.maxMp`
+//   MELEE_* / RANGED_*          → `Player.meleeDamage` · `rangedDamage` · `LevelGains`
+//   DEFENSE_CONSTANT            → `Player.defenseConstant`
+//   MONSTER_BASE_HP / _PER_LEVEL→ `MonsterCodex._statsFor` 의 `baseHp`
+//   MONSTER_BASE_XP / _PER_LEVEL→ `MonsterCodex._statsFor` 의 `baseXp`
+
+/// 1 레벨 사이보그의 몸체 내구도.
+///
+/// 몬스터가 주는 피해가 곧 그 몬스터의 레벨이므로(1~200), 이 값은 "레벨 N 몬스터에게
+/// 몇 대까지 버티는가" 를 그대로 뜻한다.
+const BASE_MAX_HP: i32 = 10_000;
+
+/// 레벨업 한 번에 늘어나는 최대 체력.
+const HP_PER_LEVEL: i32 = 1_000;
+
+/// 1 레벨 사이보그의 마력 회로 용량.
+const BASE_MAX_MP: i32 = 5_000;
+
+/// 레벨업 한 번에 늘어나는 최대 마력.
+const MP_PER_LEVEL: i32 = 600;
+
+/// 1 레벨의 근접 피해. 레벨마다 [`MELEE_PER_LEVEL`] 씩 오른다.
+const MELEE_BASE_DAMAGE: f32 = 26.0;
+const MELEE_PER_LEVEL: f32 = 4.5;
+/// 5 레벨 강화 구간에서 [`MELEE_PER_LEVEL`] 대신 붙는 몫의 **차액**.
+const MELEE_MILESTONE_BONUS: f32 = 3.5;
+
+/// 1 레벨의 원거리 피해.
+const RANGED_BASE_DAMAGE: f32 = 18.0;
+const RANGED_PER_LEVEL: f32 = 3.0;
+const RANGED_MILESTONE_BONUS: f32 = 2.5;
+
+/// 방어력이 이 값과 같아지면 받는 피해가 절반이 된다([`damage_after_defense`]).
+const DEFENSE_CONSTANT: i32 = 100;
+
+/// 회복 판정 주기(밀리초). 1 초.
+///
+/// 회복은 몹 AI 처럼 촘촘할 필요가 없다. 클라이언트가 그 사이를 이어 그리므로
+/// 화면에서는 부드럽게 차오르고, 서버 트랜잭션은 초당 한 번으로 끝난다.
+const REGEN_TICK_MILLIS: u64 = 1_000;
+
+/// 안전지대에서 1 초에 채워지는 최대 체력의 비율(1000 분율).
+///
+/// 클라이언트 `RestRecovery.hpPerSecond`(0.12)와 같아야 한다. 정수로 두는 이유는
+/// reducer 가 같은 인자로 재실행될 수 있어 부동소수 누적을 상태로 들고 있으면
+/// 안 되기 때문이다 — 매 틱 최대치에서 다시 계산하면 재실행돼도 결과가 같다.
+const REST_HP_PER_MILLE: i32 = 120;
+
+/// 안전지대에서 1 초에 채워지는 최대 마력의 비율(1000 분율).
+/// 클라이언트 `RestRecovery.mpPerSecond`(0.15)와 같아야 한다.
+const REST_MP_PER_MILLE: i32 = 150;
+
+/// 거점 밖에서 1 초에 저절로 차는 마력의 비율(1000 분율). 거의 차지 않는다.
+/// 클라이언트 `RestRecovery.fieldMpPerSecond`(0.005)와 같아야 한다.
+const FIELD_MP_PER_MILLE: i32 = 5;
+
+/// 1 레벨 몬스터의 기본 체력. 계열 배율([`hp_scale`])이 곱해진다.
+const MONSTER_BASE_HP: f32 = 26.0;
+const MONSTER_HP_PER_LEVEL: f32 = 23.0;
+
+/// 1 레벨 몬스터의 기본 경험치. 계열 배율([`xp_scale`])이 곱해진다.
+const MONSTER_BASE_XP: f64 = 10.0;
+const MONSTER_XP_PER_LEVEL: f64 = 9.0;
 
 /// 텔레포트 목적지가 월드 가장자리에서 안쪽으로 들어온 거리(타일).
 ///
@@ -208,6 +305,57 @@ pub struct WorldPlayer {
     /// 첫 텔레포트가 막히지 않는다.
     #[default(Timestamp::UNIX_EPOCH)]
     pub next_teleport_at: Timestamp,
+
+    /// 이 시각 전에는 몬스터에게 다시 맞지 않는다.
+    ///
+    /// 여러 몹이 동시에 달려들 때 한 틱에 몰아서 맞고 즉사하는 것을 막는다.
+    /// 쿨다운을 몹이 아니라 **맞는 쪽**에 두는 이유다.
+    ///
+    /// 맨 끝에 있고 기본값이 있어야 한다([`next_teleport_at`] 과 같은 이유).
+    #[default(Timestamp::UNIX_EPOCH)]
+    pub next_hurt_at: Timestamp,
+
+    /// 지금 마력. 스킬을 쓸 때 서버가 여기서 깎는다.
+    ///
+    /// 클라이언트가 "마력을 얼마 썼다" 고 보고하는 길은 없다 — 보고를 받으면 그
+    /// 순간 마력은 조작 가능한 값이 되고, 마력으로 제한하려던 모든 것이 무의미해진다.
+    #[default(0)]
+    pub mp: i32,
+
+    #[default(0)]
+    pub max_mp: i32,
+
+    /// 방어력. 받는 피해를 [`DEFENSE_CONSTANT`] 기준의 승수로 깎는다.
+    ///
+    /// 기본값은 0 이며, 이때 받는 피해는 때린 몬스터의 레벨과 정확히 같다.
+    /// 지금은 올릴 방법이 없다 — 성장·장비·버프 중 어디에 붙일지 정해지지 않았다.
+    /// 축만 먼저 세워 둔다.
+    #[default(0)]
+    pub defense: i32,
+
+    /// 지금까지 쓰러진 횟수.
+    ///
+    /// 사망은 **이 게임에서 상태가 아니라 사건**이다 — 쓰러지면 곧바로 안전지대에서
+    /// 다시 일어서므로 `alive` 를 내려 두는 순간이 거의 없고, 클라이언트가 구독으로
+    /// 그 찰나를 보리라 기대할 수 없다. 대신 이 누적 수가 **오르는 것**을 보고
+    /// 사망 연출·카메라 이동을 시작한다. 상태 변화로 사건을 전달하는 방식이며,
+    /// 별도의 이벤트 표보다 재접속·재구독에 강하다(과거 이벤트가 되살아나지 않는다).
+    #[default(0)]
+    pub deaths: u32,
+
+    /// 이 시각 전에는 어떤 피해도 통하지 않는다.
+    ///
+    /// 재가동 직후의 무방비 상태를 지켜 준다. 안전지대 안은 어차피 면역이지만,
+    /// 밖으로 걸어 나가는 순간 대기하던 몹에게 즉사하지 않도록 짧은 유예를 준다.
+    #[default(Timestamp::UNIX_EPOCH)]
+    pub invulnerable_until: Timestamp,
+
+    /// 마지막으로 피해를 입은 시각. 안전지대 회복의 대기 시간 기준이다.
+    ///
+    /// 얻어맞자마자 거점으로 뛰어들어 즉시 회복하는 것을 막는다
+    /// (클라이언트 `RestRecovery.warmupAfterDamage` 와 같은 규칙).
+    #[default(Timestamp::UNIX_EPOCH)]
+    pub last_damaged_at: Timestamp,
 }
 
 /// 월드에 상주하는 몬스터 한 마리.
@@ -218,7 +366,13 @@ pub struct WorldPlayer {
 #[spacetimedb::table(
     accessor = monster,
     public,
-    index(accessor = by_alive_died, btree(columns = [alive, died_at]))
+    index(accessor = by_alive_died, btree(columns = [alive, died_at])),
+    // 몬스터 AI 는 매 틱 **플레이어 근처만** 훑어야 한다. 7,000 기를 전부
+    // 순회하면 한 틱이 감당할 수 없다.
+    //
+    // 좌표(`f32`)에는 범위 인덱스를 걸 수 없어 정수 청크 번호를 따로 둔다.
+    // 플레이어가 선 청크와 그 이웃만 조회하면 훑는 수가 수십 기로 줄어든다.
+    index(accessor = by_chunk, btree(columns = [chunk]))
 )]
 pub struct Monster {
     #[primary_key]
@@ -228,6 +382,7 @@ pub struct Monster {
     /// 고정 스폰 자리 번호. 리스폰하면 같은 자리로 돌아온다.
     #[unique]
     pub spawn_slot: u32,
+
 
     /// 계열. 클라이언트 `MonsterBuild` 와 같은 이름을 쓴다
     /// ([`normalize_build`] 가 판정한다).
@@ -255,6 +410,17 @@ pub struct Monster {
 
     /// 쓰러진 시각. 리스폰 판정에만 쓰며 살아 있는 동안의 값은 의미가 없다.
     pub died_at: Timestamp,
+
+    /// 이 몹이 속한 공간 청크. `chunk_of(home_x, home_y)` 로 만든다.
+    ///
+    /// **집 좌표로 정한다.** 추격하며 움직인 위치로 정하면 청크가 계속 바뀌어
+    /// 인덱스를 다시 써야 하고, 어차피 몹은 집에서 멀리 벗어나지 않는다
+    /// ([`MONSTER_MAX_ROAM_TILES`]).
+    ///
+    /// 맨 끝에 있고 기본값이 있어야 한다 — 이미 배포된 표에 열을 더하는
+    /// 자동 마이그레이션의 조건이다. 기본값 행은 다음 재배치에서 제 값을 얻는다.
+    #[default(0u32)]
+    pub chunk: u32,
 }
 
 /// 서버가 확정한 킬 기록.
@@ -286,6 +452,32 @@ pub struct MonsterKill {
 }
 
 /// 쓰러진 몹을 되살리는 정비 타이머.
+/// 몬스터 AI 를 주기적으로 깨우는 타이머.
+///
+/// **서버가 몬스터를 움직인다.** 클라이언트가 각자 굴리면 A 화면에서는 몹이
+/// 쫓아오는데 B 화면에서는 제자리인 상태가 되고, "도망치는 동료를 도와준다"
+/// 같은 일이 성립하지 않는다. 판정의 주인이 하나여야 협업이 가능하다.
+#[spacetimedb::table(accessor = monster_ai_timer, scheduled(monster_ai))]
+pub struct MonsterAiTimer {
+    #[primary_key]
+    #[auto_inc]
+    scheduled_id: u64,
+    scheduled_at: ScheduleAt,
+}
+
+/// 체력·마력 자연 회복을 주기적으로 깨우는 타이머.
+///
+/// **회복도 서버가 판정한다.** 클라이언트가 스스로 채우면 "안전지대에 있다" 는
+/// 주장 하나로 무한히 회복할 수 있고, 그러면 사냥의 압박이 사라진다. 안전지대
+/// 안인지도 서버가 자기 좌표로 본다.
+#[spacetimedb::table(accessor = regen_timer, scheduled(regen_tick))]
+pub struct RegenTimer {
+    #[primary_key]
+    #[auto_inc]
+    scheduled_id: u64,
+    scheduled_at: ScheduleAt,
+}
+
 #[spacetimedb::table(accessor = monster_tick_timer, scheduled(monster_tick))]
 pub struct MonsterTickTimer {
     #[primary_key]
@@ -302,6 +494,29 @@ pub struct MonsterTickTimer {
 /// 그리든 판정은 서버 값으로 하므로, 목록이 어긋나면 서버 쪽이 정본이다.
 pub const MONSTER_BUILDS: [&str; 4] = ["drone", "walker", "siege", "sovereign"];
 
+/// 레벨에서 골격을 정한다. **클라이언트 도감(`MonsterFamily.all`)과 같은 표다.**
+///
+/// 도감은 `레벨 = 등급 × 20 + 계열 + 1` 로 200 종을 채우므로, 레벨만 알면 계열이
+/// 나오고 계열에서 골격이 나온다. 서버가 골격을 무작위로 뽑으면 같은 레벨의
+/// 몹이 서버에서는 보행형인데 클라이언트 도감에서는 비행형이 되어, 화면에
+/// 그려지는 몸과 서버가 계산한 체력·경험치가 서로 다른 것을 가리키게 된다.
+///
+/// 이 배열이 클라이언트와 어긋나면 그 순간 두 세계가 갈라진다.
+const FAMILY_BUILDS: [&str; 20] = [
+    "drone", "drone", "drone", "drone", "drone", // 정찰기 ~ 섬광기
+    "walker", "walker", "walker", "walker", // 순찰병 ~ 창병
+    "sovereign", // 군주 — 10, 30, 50 … 레벨의 구역 보스
+    "siege", "siege", "siege", "siege", "siege", // 방벽 ~ 공성기
+    "walker", "walker", // 사냥개 · 결전병
+    "siege", "siege", // 수확자 · 처형자
+    "sovereign", // 종말 — 20, 40, 60 … 레벨의 구역 대군주
+];
+
+/// [`level`] 의 몬스터가 어떤 골격인지.
+pub fn build_for_level(level: u32) -> &'static str {
+    FAMILY_BUILDS[((level.max(1) - 1) % 20) as usize]
+}
+
 /// 계열 이름을 서버가 아는 값으로 정규화한다.
 pub fn normalize_build(raw: &str) -> Result<String, String> {
     let build = raw.trim().to_lowercase();
@@ -312,25 +527,28 @@ pub fn normalize_build(raw: &str) -> Result<String, String> {
     }
 }
 
-/// 계열별 기본 체력.
-fn base_hp(build: &str) -> i32 {
+/// 계열별 체력 배율. 클라이언트 `MonsterCodex._statsFor` 의 `baseHp * N` 과 같아야 한다.
+///
+/// 서버가 판정의 주인이므로 이 값이 정본이고 클라이언트는 표시용 사본이다. 한쪽만
+/// 바뀌면 "화면에서는 죽었는데 서버는 살아 있는" 상태가 생긴다.
+fn hp_scale(build: &str) -> f32 {
     match build {
-        "drone" => 40,
-        "walker" => 90,
-        "siege" => 180,
-        "sovereign" => 520,
-        _ => 60,
+        "drone" => 0.72,
+        "walker" => 1.15,
+        "siege" => 1.6,
+        "sovereign" => 2.8,
+        _ => 1.0,
     }
 }
 
-/// 계열별 기본 경험치.
-fn base_xp(build: &str) -> u64 {
+/// 계열별 경험치 배율. 클라이언트 `MonsterCodex._statsFor` 의 `baseXp * N` 과 같아야 한다.
+fn xp_scale(build: &str) -> f64 {
     match build {
-        "drone" => 12,
-        "walker" => 26,
-        "siege" => 60,
-        "sovereign" => 240,
-        _ => 15,
+        "drone" => 0.8,
+        "walker" => 1.0,
+        "siege" => 1.45,
+        "sovereign" => 4.0,
+        _ => 1.0,
     }
 }
 
@@ -345,30 +563,86 @@ fn build_for_roll(roll: u32) -> &'static str {
 }
 
 /// 몹 레벨에 따른 체력.
+///
+/// 클라이언트 `MonsterCodex._statsFor` 의 `baseHp = 26 + (level-1) * 23` 과 같은 식이다.
+/// 곡선이 지수가 아니라 선형인 이유는 레벨이 200 까지 뻗기 때문이다 — 지수면 후반
+/// 체력이 손댈 수 없게 불어난다.
 fn monster_max_hp(build: &str, level: u32) -> i32 {
-    let grow = 1.0 + (level.saturating_sub(1) as f32) * 0.18;
-    ((base_hp(build) as f32) * grow).round() as i32
+    let base = MONSTER_BASE_HP + (level.saturating_sub(1) as f32) * MONSTER_HP_PER_LEVEL;
+    (base * hp_scale(build)).round() as i32
 }
 
 /// 몹을 잡았을 때 주는 경험치.
 ///
 /// 레벨 차이는 보지 않는다. 개별 사냥이라 남의 몹을 대신 잡아 줄 이유가 없고,
 /// 고레벨이 저레벨 사냥터를 쓸어 담아도 얻는 것이 적어 자연히 갈라진다.
+///
+/// 클라이언트 `MonsterCodex._statsFor` 의 `baseXp = 10 + (level-1) * 9` 와 같은 식이다.
 fn monster_xp(build: &str, level: u32) -> u32 {
-    let grow = 1.0 + (level.saturating_sub(1) as f64) * 0.12;
-    ((base_xp(build) as f64) * grow).round() as u32
+    let base = MONSTER_BASE_XP + (level.saturating_sub(1) as f64) * MONSTER_XP_PER_LEVEL;
+    (base * xp_scale(build)).round() as u32
 }
 
 /// 캐릭터 레벨에 따른 최대 체력.
+///
+/// 클라이언트 `Player.baseMaxHp` + `LevelGains.maxHp` 누적과 같아야 한다.
 fn max_hp_for_level(level: u32) -> i32 {
-    BASE_MAX_HP + (level.saturating_sub(1) as i32) * 18
+    BASE_MAX_HP + (level.saturating_sub(1) as i32) * HP_PER_LEVEL
 }
 
-/// 캐릭터가 한 대에 넣는 피해.
+/// 캐릭터 레벨에 따른 최대 마력.
+///
+/// 클라이언트 `Player.mp` 초기값 5,000 + `LevelGains.maxMp` 누적과 같아야 한다.
+fn max_mp_for_level(level: u32) -> i32 {
+    BASE_MAX_MP + (level.saturating_sub(1) as i32) * MP_PER_LEVEL
+}
+
+/// 레벨 [`level`] 까지 오는 동안 5 레벨 구간(강화 구간)을 몇 번 지났는가.
+///
+/// 클라이언트 `LevelSystem.gainsFor` 는 `level % 5 == 0` 인 레벨에서 더 큰 성장치를
+/// 준다. 레벨업 루프를 돌리지 않고 같은 총합을 얻으려면 그 횟수만 세면 된다.
+fn milestones_upto(level: u32) -> i32 {
+    (level.max(1) / 5) as i32
+}
+
+/// 캐릭터가 근접 한 대에 넣는 피해.
 ///
 /// 장비가 아직 없으므로 레벨만 본다. 클라이언트가 보낸 값은 쓰지 않는다.
+/// 클라이언트 `Player.meleeDamage`(26 에서 시작, 레벨당 +4.5, 5 레벨마다 +8.0)와
+/// 같은 값이어야 한다.
 fn player_damage(level: u32) -> i32 {
-    14 + (level.saturating_sub(1) as i32) * 3
+    let steps = level.saturating_sub(1) as f32;
+    (MELEE_BASE_DAMAGE + steps * MELEE_PER_LEVEL
+        + milestones_upto(level) as f32 * MELEE_MILESTONE_BONUS)
+        .round() as i32
+}
+
+/// 캐릭터가 원거리 한 발에 넣는 피해.
+///
+/// 클라이언트 `Player.rangedDamage`(18 에서 시작, 레벨당 +3.0, 5 레벨마다 +5.5)와
+/// 같은 값이어야 한다.
+fn player_ranged_damage(level: u32) -> i32 {
+    let steps = level.saturating_sub(1) as f32;
+    (RANGED_BASE_DAMAGE + steps * RANGED_PER_LEVEL
+        + milestones_upto(level) as f32 * RANGED_MILESTONE_BONUS)
+        .round() as i32
+}
+
+/// 방어력을 적용한 뒤 실제로 깎이는 피해.
+///
+/// 감산형(`피해 - 방어력`)이 아니라 승수형인 이유는 몬스터 레벨이 1~200 으로 넓고
+/// 구역마다 레벨대가 묶여 배치되기 때문이다. 감산형이면 방어력이 조금만 올라도
+/// 저레벨 구역 하나가 통째로 무해해진다. 클라이언트 `Player.damageAfterDefense`
+/// 와 같은 식이다.
+///
+/// 방어력이 0 이면 받는 피해는 때린 몬스터의 레벨과 정확히 같다 — 이것이 기획 규격이다.
+fn damage_after_defense(amount: i32, defense: i32) -> i32 {
+    if defense <= 0 {
+        return amount.max(0);
+    }
+    let reduced =
+        (amount as f32) * DEFENSE_CONSTANT as f32 / (DEFENSE_CONSTANT + defense) as f32;
+    reduced.round().max(0.0) as i32
 }
 
 // ── 좌표 헬퍼 ───────────────────────────────────────────────────────────
@@ -376,6 +650,22 @@ fn player_damage(level: u32) -> i32 {
 /// 월드 한가운데. 안전지대의 중심이자 입장 지점이다.
 fn world_center() -> (f32, f32) {
     (WORLD_TILES / 2.0, WORLD_TILES / 2.0)
+}
+
+/// 공간 청크 한 변의 길이(타일).
+///
+/// 어그로·추격 거리(9~16 타일)보다 넉넉히 커야 이웃 청크 하나만 함께 봐도
+/// 놓치는 몹이 없다.
+const CHUNK_TILES: f32 = 32.0;
+
+/// 한 줄에 들어가는 청크 수.
+const CHUNKS_PER_ROW: u32 = (WORLD_TILES / CHUNK_TILES) as u32 + 1;
+
+/// 좌표가 속한 청크 번호.
+pub fn chunk_of(x: f32, y: f32) -> u32 {
+    let cx = (x / CHUNK_TILES).max(0.0) as u32;
+    let cy = (y / CHUNK_TILES).max(0.0) as u32;
+    cy * CHUNKS_PER_ROW + cx
 }
 
 /// 안전지대 안인가.
@@ -407,6 +697,11 @@ fn micros_between(later: Timestamp, earlier: Timestamp) -> i64 {
 /// 이미 몹이 있으면 아무것도 하지 않으므로, 모듈을 다시 배포해도 사냥터가
 /// 통째로 리셋되지 않는다.
 pub fn bootstrap(ctx: &ReducerContext) {
+    // 타이머부터 확인한다. 몹이 이미 있어 아래에서 돌아 나가더라도 주기 작업은
+    // 돌고 있어야 한다 — 이 순서를 뒤집으면 재배포 뒤 AI 와 리스폰이 조용히
+    // 멈춘 채로 남고, 몹이 그냥 안 움직이는 것처럼 보인다.
+    ensure_timers(ctx);
+
     if ctx.db.monster().count() > 0 {
         log::info!("월드가 이미 서 있다. 몬스터 배치를 건너뛴다.");
         return;
@@ -440,6 +735,7 @@ pub fn bootstrap(ctx: &ReducerContext) {
                     home_y: y,
                     grid_x: x,
                     grid_y: y,
+                    chunk: chunk_of(x, y),
                     hp: max_hp,
                     max_hp,
                     alive: true,
@@ -468,6 +764,45 @@ pub fn bootstrap(ctx: &ReducerContext) {
 /// **여러 번 불러도 안전하다.** 몹이 이미 있으면 아무것도 하지 않는다. 그래서
 /// 호출자를 가리지 않는다 — 누가 부르든 할 수 있는 일은 "아직 비어 있는 월드를
 /// 채우는 것" 하나뿐이고, 그것은 어차피 일어나야 하는 일이다.
+/// 주기 작업 타이머가 돌고 있는지 확인하고, 없으면 건다.
+///
+/// 표를 선언하는 것만으로는 아무것도 돌지 않는다 — **행을 하나 넣어야** 그때부터
+/// 주기 실행이 시작된다. 이걸 빠뜨리면 리스폰도 AI 도 조용히 멈춰 있고, 몹이
+/// 그냥 안 움직이는 것처럼 보여 원인을 찾기 어렵다.
+///
+/// 여러 번 불러도 안전하다. 이미 있으면 더 넣지 않는다.
+fn ensure_timers(ctx: &ReducerContext) {
+    if ctx.db.monster_tick_timer().count() == 0 {
+        ctx.db.monster_tick_timer().insert(MonsterTickTimer {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(
+                std::time::Duration::from_secs(MONSTER_TICK_SECS).into(),
+            ),
+        });
+        log::info!("몬스터 정비 타이머를 걸었다({MONSTER_TICK_SECS}초 주기).");
+    }
+
+    if ctx.db.monster_ai_timer().count() == 0 {
+        ctx.db.monster_ai_timer().insert(MonsterAiTimer {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(
+                std::time::Duration::from_millis(MONSTER_AI_MILLIS).into(),
+            ),
+        });
+        log::info!("몬스터 AI 타이머를 걸었다({MONSTER_AI_MILLIS}ms 주기).");
+    }
+
+    if ctx.db.regen_timer().count() == 0 {
+        ctx.db.regen_timer().insert(RegenTimer {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(
+                std::time::Duration::from_millis(REGEN_TICK_MILLIS).into(),
+            ),
+        });
+        log::info!("회복 타이머를 걸었다({REGEN_TICK_MILLIS}ms 주기).");
+    }
+}
+
 /// 몬스터를 전부 걷어내고 지금 규칙으로 다시 심는다.
 ///
 /// 배치 규칙(레벨 대역·지역 수·군집 크기)을 바꿔도 [`bootstrap`] 은 이미 몹이
@@ -598,7 +933,7 @@ fn scatter_around(ctx: &ReducerContext, cx: f32, cy: f32, radius: f32) -> (f32, 
 /// 들어가는 자리는 항상 안전지대 한가운데다. 마지막 위치에서 이어 시작하면
 /// 사냥터 한복판에서 로그아웃해 위험을 회피하는 짓이 통하기 때문이다.
 #[spacetimedb::reducer]
-pub fn enter_world(ctx: &ReducerContext) -> Result<(), String> {
+pub fn enter_world(ctx: &ReducerContext, grid_x: f32, grid_y: f32) -> Result<(), String> {
     let session = crate::require_session(ctx)?;
     let character_id = session
         .selected_character_id
@@ -626,8 +961,36 @@ pub fn enter_world(ctx: &ReducerContext) -> Result<(), String> {
         }
     }
 
+    // 입장 좌표는 **클라이언트가 정한다.** 지형을 아는 것은 그쪽뿐이고, 서버가
+    // 중심에 고정하면 실제 몸이 선 자리와 어긋난다. 그 어긋남은 눈에 잘 띄지
+    // 않으면서 치명적이다 — `move_to` 는 속도 상한(14타일/초)에 걸려 그 간격을
+    // 몇 초에 걸쳐 좁히고, 그동안 다른 요원의 화면에는 엉뚱한 곳에 서 있거나
+    // 아예 화면 밖에 있다. "움직여야 비로소 보인다" 는 증상이 여기서 나온다.
+    //
+    // 대신 **안전지대 안인지**만 검증한다. 아무 데나 나타날 수 있으면 입장이
+    // 곧 무제한 텔레포트가 된다. 안전지대는 어차피 모두가 시작하는 자리다.
     let (cx, cy) = world_center();
+    let (spawn_x, spawn_y) = if grid_x.is_finite()
+        && grid_y.is_finite()
+        && in_safe_zone(grid_x, grid_y)
+    {
+        (grid_x, grid_y)
+    } else {
+        (cx, cy)
+    };
+
     let max_hp = max_hp_for_level(character.level);
+    let max_mp = max_mp_for_level(character.level);
+
+    // 이미 월드에 있던 행이면 사망 누계를 이어받는다. 0 으로 되돌리면 재접속이
+    // 사망 기록을 지우는 수단이 되고, 클라이언트는 줄어든 수를 사망으로 읽지 않는다.
+    let deaths = ctx
+        .db
+        .world_player()
+        .identity()
+        .find(ctx.sender())
+        .map(|existing| existing.deaths)
+        .unwrap_or(0);
 
     let player = WorldPlayer {
         identity: ctx.sender(),
@@ -635,8 +998,8 @@ pub fn enter_world(ctx: &ReducerContext) -> Result<(), String> {
         name: character.name,
         kind: character.kind,
         level: character.level,
-        grid_x: cx,
-        grid_y: cy,
+        grid_x: spawn_x,
+        grid_y: spawn_y,
         hp: max_hp,
         max_hp,
         alive: true,
@@ -644,6 +1007,17 @@ pub fn enter_world(ctx: &ReducerContext) -> Result<(), String> {
         last_move_at: ctx.timestamp,
         entered_at: ctx.timestamp,
         next_teleport_at: ctx.timestamp,
+        next_hurt_at: ctx.timestamp,
+        mp: max_mp,
+        max_mp,
+        // 방어력을 얻는 경로가 아직 없다. 축만 세워 두고 값은 0 이다.
+        defense: 0,
+        deaths,
+        // 입장 지점은 안전지대라 어차피 면역이지만, 밖으로 걸어 나가는 순간까지
+        // 이어지도록 짧은 유예를 준다.
+        invulnerable_until: ctx.timestamp
+            + TimeDuration::from_micros(RESPAWN_INVULNERABLE_MICROS),
+        last_damaged_at: Timestamp::UNIX_EPOCH,
     };
 
     match ctx.db.world_player().identity().find(ctx.sender()) {
@@ -669,6 +1043,12 @@ pub fn leave_world(ctx: &ReducerContext) -> Result<(), String> {
 #[spacetimedb::reducer]
 pub fn move_to(ctx: &ReducerContext, grid_x: f32, grid_y: f32) -> Result<(), String> {
     let me = require_world_player(ctx)?;
+
+    // 쓰러진 몸은 걷지 않는다. 이 검사가 없으면 사망 판정과 재가동 사이에 들어온
+    // 좌표 보고가 시체를 사냥터로 되돌려 놓는다.
+    if !me.alive {
+        return Err("쓰러진 상태다.".to_string());
+    }
 
     if !grid_x.is_finite() || !grid_y.is_finite() {
         return Err("좌표가 올바르지 않다.".to_string());
@@ -862,6 +1242,420 @@ pub fn attack_monster(ctx: &ReducerContext, monster_id: u64) -> Result<(), Strin
     Ok(())
 }
 
+// ── 스킬 ────────────────────────────────────────────────────────────────
+
+/// 서버가 아는 스킬 하나의 정의.
+///
+/// **정의가 서버에 있어야 스킬이 성립한다.** 마력 비용·쿨다운·사거리를 클라이언트가
+/// 보내면 "비용 0, 쿨다운 0, 사거리 무한" 이라고 보내지 못할 이유가 없다.
+struct SkillSpec {
+    /// 한 번 쓰는 데 드는 마력.
+    mp_cost: i32,
+    /// 재사용까지의 간격(마이크로초).
+    cooldown_micros: i64,
+    /// 닿는 거리(타일).
+    range_tiles: f32,
+}
+
+/// 플라즈마 볼트 — 원거리 단일 대상.
+///
+/// 클라이언트 `Player.tryShoot` 과 같은 값이어야 한다(마력 60, 쿨다운 0.24 초).
+/// 사거리는 클라이언트가 발사체 비행으로 표현하던 것을 서버 판정용 거리로 옮긴
+/// 값이다 — 발사체를 서버가 시뮬레이션하려면 고주파 틱이 필요하고, 그 비용은
+/// 지금 얻는 것보다 크다. 대신 몹의 어그로 거리(9 타일)보다 조금 길게 잡아
+/// "화면에 보이는 적은 쏠 수 있다" 를 지킨다.
+const SKILL_PLASMA: SkillSpec = SkillSpec {
+    mp_cost: 60,
+    cooldown_micros: 240_000,
+    range_tiles: 10.0,
+};
+
+/// 이름으로 스킬 정의를 찾는다. 서버가 모르는 이름은 스킬이 아니다.
+fn skill_spec(skill_id: &str) -> Option<SkillSpec> {
+    match skill_id.trim().to_lowercase().as_str() {
+        "plasma" => Some(SKILL_PLASMA),
+        _ => None,
+    }
+}
+
+/// 스킬을 쓴다. **마력·쿨다운·사거리·피해를 전부 서버가 정한다.**
+///
+/// 클라이언트는 "무슨 스킬을 누구에게" 라는 의도만 보낸다. 실패하면 마력도 쿨다운도
+/// 소비되지 않으며, 실패 사유가 에러로 돌아간다.
+///
+/// 지금은 즉시 판정형 하나뿐이다. 지속 장판이나 지연 강타처럼 시간에 걸쳐 효과가
+/// 이어지는 스킬은 고주파 틱을 전제로 하므로, 회복·AI 틱의 비용이 실측된 뒤에 붙인다.
+#[spacetimedb::reducer]
+pub fn cast_skill(
+    ctx: &ReducerContext,
+    skill_id: String,
+    monster_id: u64,
+) -> Result<(), String> {
+    let me = require_world_player(ctx)?;
+    if !me.alive {
+        return Err("쓰러진 상태다.".to_string());
+    }
+
+    let spec = skill_spec(&skill_id).ok_or_else(|| format!("모르는 스킬이다: {skill_id:?}"))?;
+
+    // 쿨다운은 기본 공격과 같은 시계를 쓴다. 따로 두면 평타와 스킬을 번갈아
+    // 눌러 두 배로 때리는 길이 열린다.
+    if ctx.timestamp < me.next_attack_at {
+        return Err("아직 쓸 수 없다.".to_string());
+    }
+    if me.mp < spec.mp_cost {
+        return Err("마력이 모자란다.".to_string());
+    }
+
+    let mut monster = ctx
+        .db
+        .monster()
+        .id()
+        .find(monster_id)
+        .ok_or_else(|| "몬스터를 찾을 수 없다.".to_string())?;
+    if !monster.alive {
+        return Err("이미 쓰러진 몬스터다.".to_string());
+    }
+    if dist_sq(me.grid_x, me.grid_y, monster.grid_x, monster.grid_y)
+        > spec.range_tiles * spec.range_tiles
+    {
+        return Err("사거리 밖이다.".to_string());
+    }
+
+    // 선점 규칙은 평타와 같다 — 스킬로 때렸다고 크레딧 규칙이 달라지면
+    // "스킬로만 가로채기" 라는 구멍이 생긴다.
+    let tag_expired = micros_between(ctx.timestamp, monster.tagged_at) > TAG_TTL_MICROS;
+    if monster.tagged_by.is_none() || tag_expired {
+        monster.tagged_by = Some(me.character_id);
+    }
+    if monster.tagged_by == Some(me.character_id) {
+        monster.tagged_at = ctx.timestamp;
+    }
+
+    monster.hp -= player_ranged_damage(me.level);
+
+    let mut killed = None;
+    if monster.hp <= 0 {
+        monster.hp = 0;
+        monster.alive = false;
+        monster.died_at = ctx.timestamp;
+        let owner = monster.tagged_by.unwrap_or(me.character_id);
+        let stealer = if owner == me.character_id {
+            None
+        } else {
+            Some(me.character_id)
+        };
+        killed = Some((owner, stealer));
+    }
+
+    let kind = monster.kind.clone();
+    let level = monster.level;
+    ctx.db.monster().id().update(monster);
+
+    ctx.db.world_player().identity().update(WorldPlayer {
+        mp: me.mp - spec.mp_cost,
+        next_attack_at: ctx.timestamp + TimeDuration::from_micros(spec.cooldown_micros),
+        ..me
+    });
+
+    if let Some((owner, stealer)) = killed {
+        award_kill(ctx, owner, stealer, &kind, level);
+    }
+
+    Ok(())
+}
+
+// ── PK ──────────────────────────────────────────────────────────────────
+
+/// 다른 요원을 친다. **PK 는 허용된다.**
+///
+/// 사냥터 다툼이 그대로 PK 의 동기가 된다 — 남이 선점한 몹을 뺏고 싶으면 몹이
+/// 아니라 그 사람을 쓰러뜨려야 한다([`attack_monster`] 의 선점 규칙 참고).
+///
+/// 안전지대 안에서는 통하지 않는다. 그 판정은 [`apply_damage_to_player`] 가 한다 —
+/// 몹의 공격과 같은 규칙을 쓰지 않으면 "PK 로는 안전지대에서도 맞는다" 는 구멍이 된다.
+#[spacetimedb::reducer]
+pub fn attack_player(ctx: &ReducerContext, target_character_id: u64) -> Result<(), String> {
+    let me = require_world_player(ctx)?;
+    if !me.alive {
+        return Err("쓰러진 상태다.".to_string());
+    }
+    if me.character_id == target_character_id {
+        return Err("자기 자신은 칠 수 없다.".to_string());
+    }
+    if ctx.timestamp < me.next_attack_at {
+        return Err("아직 공격할 수 없다.".to_string());
+    }
+
+    let target = ctx
+        .db
+        .world_player()
+        .character_id()
+        .find(target_character_id)
+        .ok_or_else(|| "상대를 찾을 수 없다.".to_string())?;
+
+    // 때리는 쪽이 안전지대 안이면 일방적으로 때리고 도망칠 수 있다. 양쪽 모두 막는다.
+    if in_safe_zone(me.grid_x, me.grid_y) {
+        return Err("안전지대에서는 공격할 수 없다.".to_string());
+    }
+    if dist_sq(me.grid_x, me.grid_y, target.grid_x, target.grid_y)
+        > ATTACK_RANGE_TILES * ATTACK_RANGE_TILES
+    {
+        return Err("사거리 밖이다.".to_string());
+    }
+
+    let updated = apply_damage_to_player(ctx, target, player_damage(me.level), false, false);
+    ctx.db.world_player().identity().update(updated);
+
+    ctx.db.world_player().identity().update(WorldPlayer {
+        next_attack_at: ctx.timestamp + TimeDuration::from_micros(ATTACK_COOLDOWN_MICROS),
+        ..me
+    });
+
+    Ok(())
+}
+
+/// 몬스터를 움직이고, 닿으면 때린다. **서버가 몬스터의 주인이다.**
+///
+/// 클라이언트가 각자 AI 를 굴리면 A 화면에서는 몹이 쫓아오는데 B 화면에서는
+/// 제자리인 상태가 된다. 그러면 "쫓기는 동료를 도와준다" 같은 일이 성립하지
+/// 않는다 — 판정의 주인이 하나여야 협업이 가능하다.
+///
+/// 매 틱 7,000 기를 전부 훑지는 않는다. 플레이어가 없으면 아무것도 하지 않고,
+/// 있으면 그 주변만 [`by_grid_x`](Monster) 인덱스로 좁혀 본다. 몹은 대부분
+/// 아무도 없는 곳에 서 있으므로 실제로 계산되는 것은 소수다.
+#[spacetimedb::reducer]
+pub fn monster_ai(ctx: &ReducerContext, _timer: MonsterAiTimer) {
+    let players: Vec<WorldPlayer> = ctx
+        .db
+        .world_player()
+        .iter()
+        .filter(|p| p.alive)
+        .collect();
+    if players.is_empty() {
+        return;
+    }
+
+    let dt = MONSTER_AI_MILLIS as f32 / 1000.0;
+    let step = MONSTER_SPEED * dt;
+    let mut moved = 0u32;
+    let mut hits = 0u32;
+
+    // 플레이어 주변 몹을 모은다. 한 몹이 여러 사람 범위에 걸릴 수 있으므로
+    // 번호로 중복을 없앤 뒤 한 번씩만 판단한다.
+    let mut nearby: std::collections::HashMap<u64, Monster> =
+        std::collections::HashMap::new();
+    for player in &players {
+        // 선 청크와 이웃 여덟 칸. 청크 한 변(32타일)이 추격 거리보다 넉넉해
+        // 이 범위면 관계있는 몹을 놓치지 않는다.
+        let cx = (player.grid_x / CHUNK_TILES) as i64;
+        let cy = (player.grid_y / CHUNK_TILES) as i64;
+        for dy in -1..=1i64 {
+            for dx in -1..=1i64 {
+                let nx = cx + dx;
+                let ny = cy + dy;
+                if nx < 0 || ny < 0 {
+                    continue;
+                }
+                let key = (ny as u32) * CHUNKS_PER_ROW + (nx as u32);
+                for monster in ctx.db.monster().by_chunk().filter(key) {
+                    if monster.alive {
+                        nearby.insert(monster.id, monster);
+                    }
+                }
+            }
+        }
+    }
+
+    let nearby_count = nearby.len();
+
+    // 이번 틱에 맞은 사람 → 받은 피해의 **합**(방어 적용 전).
+    //
+    // 여기서 체력을 깎지 않고 합만 모으는 이유는, 방어·무적·사망·재가동 판정이
+    // [`apply_damage_to_player`] 한 곳에만 있어야 하기 때문이다. 여러 몹이 같은
+    // 사람을 때렸을 때 몹마다 따로 판정하면 무적 창이 몹 수만큼 갈라진다.
+    let mut hurt: std::collections::HashMap<Identity, i32> = std::collections::HashMap::new();
+
+    for (_, monster) in nearby {
+        // 가장 가까운 플레이어를 고른다. 사람 수는 적으므로 전부 재도 싸다.
+        let mut target: Option<(&WorldPlayer, f32)> = None;
+        for player in &players {
+            let d2 = dist_sq(monster.grid_x, monster.grid_y, player.grid_x, player.grid_y);
+            if target.is_none() || d2 < target.unwrap().1 {
+                target = Some((player, d2));
+            }
+        }
+        let Some((player, dist_sq_to_player)) = target else {
+            continue;
+        };
+        let distance = dist_sq_to_player.sqrt();
+        let from_home = dist_sq(monster.grid_x, monster.grid_y, monster.home_x, monster.home_y)
+            .sqrt();
+
+        // 너무 멀리 끌려왔거나 대상이 어그로를 벗어나면 제자리로 돌아간다.
+        // 이 줄이 없으면 몹이 월드를 가로질러 끌려다니고, 사냥터가 무너진다.
+        let go_home = distance > MONSTER_LEASH_TILES || from_home > MONSTER_MAX_ROAM_TILES;
+
+        if go_home {
+            if from_home > 0.2 {
+                let (nx, ny) = step_toward(
+                    monster.grid_x,
+                    monster.grid_y,
+                    monster.home_x,
+                    monster.home_y,
+                    step,
+                );
+                ctx.db.monster().id().update(Monster {
+                    grid_x: nx,
+                    grid_y: ny,
+                    ..monster
+                });
+                moved += 1;
+            }
+            continue;
+        }
+
+        if distance > MONSTER_AGGRO_TILES {
+            continue; // 아직 못 봤다. 제자리에 선다.
+        }
+
+        // 안전지대 안의 사람은 쫓지 않는다. 쉬는 곳까지 따라오면 회복할 자리가
+        // 월드에서 사라진다.
+        if in_safe_zone(player.grid_x, player.grid_y) {
+            continue;
+        }
+
+        if distance > ATTACK_RANGE_TILES {
+            // 아직 멀다. 다가간다.
+            let (nx, ny) = step_toward(
+                monster.grid_x,
+                monster.grid_y,
+                player.grid_x,
+                player.grid_y,
+                step,
+            );
+            ctx.db.monster().id().update(Monster {
+                grid_x: nx,
+                grid_y: ny,
+                ..monster
+            });
+            moved += 1;
+            continue;
+        }
+
+        // 닿았다. 맞는 쪽의 쿨다운을 본다 — 여러 몹이 한 틱에 몰아치면
+        // 손쓸 새 없이 즉사한다.
+        if ctx.timestamp < player.next_hurt_at {
+            continue;
+        }
+
+        // 때린 사실만 모아 둔다. 실제 판정은 아래에서 한 번에 한다 — 여러 몹이
+        // 같은 사람을 때렸을 때 방어·무적·사망을 각자 따로 계산하면 어긋난다.
+        *hurt.entry(player.identity).or_insert(0) += monster.level as i32;
+        hits += 1;
+    }
+
+    // 실제로 무언가 일어났을 때만 남긴다. 매 틱 찍으면 초당 세 줄씩 쌓인다.
+    if moved > 0 || hits > 0 {
+        log::info!(
+            "AI: 요원 {} 명 주변 {} 기 중 {} 기 이동, {} 회 타격",
+            players.len(),
+            nearby_count,
+            moved,
+            hits
+        );
+    }
+
+    // 피해 적용은 표에서 다시 읽은 최신 행으로 한다. 위 루프가 도는 사이
+    // 같은 사람이 다른 reducer 로 갱신됐을 수 있다.
+    for (identity, raw_damage) in hurt {
+        let Some(victim) = ctx.db.world_player().identity().find(identity) else {
+            continue;
+        };
+        // 무적·안전지대·방어·사망·재가동은 전부 이 한 곳이 판정한다.
+        let hurt_at = ctx.timestamp + TimeDuration::from_micros(MONSTER_ATTACK_COOLDOWN_MICROS);
+        let updated = apply_damage_to_player(ctx, victim, raw_damage, false, false);
+        ctx.db.world_player().identity().update(WorldPlayer {
+            next_hurt_at: hurt_at,
+            ..updated
+        });
+    }
+}
+
+/// `(fx, fy)` 에서 `(tx, ty)` 쪽으로 `step` 만큼 나아간 좌표.
+///
+/// 목표를 지나치지 않는다 — 지나치면 목표 주위에서 떨리게 된다.
+fn step_toward(fx: f32, fy: f32, tx: f32, ty: f32, step: f32) -> (f32, f32) {
+    let dx = tx - fx;
+    let dy = ty - fy;
+    let dist = (dx * dx + dy * dy).sqrt();
+    if dist <= step || dist <= 0.0001 {
+        return (tx, ty);
+    }
+    let ratio = step / dist;
+    (
+        (fx + dx * ratio).clamp(WORLD_EDGE_MARGIN, PLAYABLE_MAX),
+        (fy + dy * ratio).clamp(WORLD_EDGE_MARGIN, PLAYABLE_MAX),
+    )
+}
+
+/// 체력과 마력을 자연 회복시킨다.
+///
+/// 안전지대 안에서는 빠르게, 밖에서는 마력만 아주 느리게 찬다. 사이보그의 몸체와
+/// 마력 회로는 용량이 커서 야전에서는 거의 차지 않고, 적이 들어올 수 없는 구역으로
+/// 물러나 쉬어야 정비 설비가 붙는다.
+///
+/// **얻어맞자마자 뛰어들어 즉시 낫는 것은 막는다**([`REST_WARMUP_MICROS`]).
+/// 그러지 않으면 위험할 때마다 거점으로 튀는 것이 최적 전략이 된다.
+///
+/// 회복량을 누적 상태로 들고 있지 않고 매 틱 최대치에서 다시 계산하는 이유는
+/// reducer 가 같은 인자로 재실행될 수 있기 때문이다(모듈 머리말 참고).
+#[spacetimedb::reducer]
+pub fn regen_tick(ctx: &ReducerContext, _timer: RegenTimer) {
+    // 회복이 필요한 사람만 고른다. 만피·만마인 사람에게 쓰기를 하면 구독자
+    // 전원에게 변화 없는 갱신이 밀려간다.
+    let players: Vec<WorldPlayer> = ctx
+        .db
+        .world_player()
+        .iter()
+        .filter(|p| p.hp < p.max_hp || p.mp < p.max_mp)
+        .collect();
+
+    for player in players {
+        let sheltered = in_safe_zone(player.grid_x, player.grid_y);
+        // 피격 직후에는 거점 회복이 걸리지 않는다. 야전 마력 회복은 그대로 둔다 —
+        // 그쪽은 어차피 초당 0.5% 라 전투 중 판세를 바꾸지 못한다.
+        let warmed = micros_between(ctx.timestamp, player.last_damaged_at) >= REST_WARMUP_MICROS;
+        let resting = sheltered && warmed;
+
+        let hp_gain = if resting {
+            (player.max_hp / 1000) * REST_HP_PER_MILLE
+        } else {
+            0
+        };
+        let mp_rate = if resting {
+            REST_MP_PER_MILLE
+        } else {
+            FIELD_MP_PER_MILLE
+        };
+        // 최대치가 1000 보다 작아도 최소 1 은 차도록 올림한다. 지금 규격에서는
+        // 최대 체력이 10,000 부터라 걸릴 일이 없지만, 수치를 낮추면 회복이
+        // 통째로 0 이 되는 함정이 된다.
+        let mp_gain = ((player.max_mp as i64 * mp_rate as i64 + 999) / 1000) as i32;
+
+        let hp = (player.hp + hp_gain).min(player.max_hp);
+        let mp = (player.mp + mp_gain).min(player.max_mp);
+        if hp == player.hp && mp == player.mp {
+            continue;
+        }
+
+        ctx.db
+            .world_player()
+            .identity()
+            .update(WorldPlayer { hp, mp, ..player });
+    }
+}
+
 /// 쓰러진 몹을 되살린다.
 #[spacetimedb::reducer]
 pub fn monster_tick(ctx: &ReducerContext, _timer: MonsterTickTimer) {
@@ -903,6 +1697,84 @@ fn require_world_player(ctx: &ReducerContext) -> Result<WorldPlayer, String> {
         .identity()
         .find(ctx.sender())
         .ok_or_else(|| "먼저 월드에 들어가야 한다.".to_string())
+}
+
+/// 재가동 직후 유지되는 무적 시간(마이크로초). 2 초.
+///
+/// 클라이언트 `Player.respawnInvulnerability` 와 같아야 한다.
+const RESPAWN_INVULNERABLE_MICROS: i64 = 2_000_000;
+
+/// 피해를 입은 뒤 안전지대 회복이 시작되기까지의 대기(마이크로초). 1.5 초.
+///
+/// 클라이언트 `RestRecovery.warmupAfterDamage` 와 같아야 한다.
+const REST_WARMUP_MICROS: i64 = 1_500_000;
+
+/// 플레이어가 피해를 입었을 때의 **유일한 수렴점**.
+///
+/// 몹의 공격도, PK 도, 앞으로 붙을 지형 피해도 전부 여기를 지난다. 판정을 한
+/// 곳에 모으는 이유는 무적·안전지대 면역·방어력·사망·재가동이 서로 맞물려 있어서,
+/// 경로가 갈라지는 순간 "PK 로는 안전지대에서도 맞는다" 같은 구멍이 생기기
+/// 때문이다. 라리엔이 `CombatResolve` 하나로 사망을 모으는 것과 같은 이유다.
+///
+/// 돌려주는 값은 **갱신된 플레이어**다. 호출자가 표에 쓰기 전에 다른 열을 더
+/// 얹을 수 있도록 여기서는 표를 건드리지 않는다 — 한 트랜잭션 안에서 같은 행을
+/// 두 번 쓰면 나중 쓰기가 앞의 것을 덮어 쓴다.
+///
+/// `raw_damage` 는 방어력을 적용하기 **전**의 값이다. 방어를 무시해야 하는
+/// 피해(지형 등)는 `ignore_defense` 로 알린다.
+fn apply_damage_to_player(
+    ctx: &ReducerContext,
+    victim: WorldPlayer,
+    raw_damage: i32,
+    ignore_defense: bool,
+    ignore_invulnerable: bool,
+) -> WorldPlayer {
+    // 안전지대 안에서는 어떤 피해도 통하지 않는다. 재접속 직후의 무방비 상태를
+    // 지켜 주는 것이 이 구역의 존재 이유다.
+    if in_safe_zone(victim.grid_x, victim.grid_y) {
+        return victim;
+    }
+    if !ignore_invulnerable && ctx.timestamp < victim.invulnerable_until {
+        return victim;
+    }
+
+    let taken = if ignore_defense {
+        raw_damage.max(0)
+    } else {
+        damage_after_defense(raw_damage, victim.defense)
+    };
+    if taken <= 0 {
+        return victim;
+    }
+
+    let hp = victim.hp - taken;
+    if hp > 0 {
+        return WorldPlayer {
+            hp,
+            last_damaged_at: ctx.timestamp,
+            ..victim
+        };
+    }
+
+    // 쓰러졌다. 이 세계에 게임 오버는 없다 — 파괴된 것은 몸체뿐이고 의식은
+    // 백업되어 있으므로 안전지대에서 곧바로 새 몸체로 재가동한다. 레벨·경험치는
+    // 그대로 두고 전투 상태만 되돌린다.
+    let (cx, cy) = world_center();
+    WorldPlayer {
+        hp: victim.max_hp,
+        mp: victim.max_mp,
+        alive: true,
+        grid_x: cx,
+        grid_y: cy,
+        // 재가동은 월드를 가로지르는 이동이다. 기준 시각을 함께 밀지 않으면
+        // 다음 좌표 보고가 "방금 500 타일을 뛰었다" 로 읽혀 속도 상한에 잘린다.
+        last_move_at: ctx.timestamp,
+        deaths: victim.deaths.saturating_add(1),
+        invulnerable_until: ctx.timestamp
+            + TimeDuration::from_micros(RESPAWN_INVULNERABLE_MICROS),
+        last_damaged_at: ctx.timestamp,
+        ..victim
+    }
 }
 
 /// 킬을 확정하고 경험치를 준다.
@@ -992,6 +1864,137 @@ mod tests {
         assert!(normalize_build("robot_overlord").is_err());
     }
 
+    // ── 전투 수치의 단일 진실 공급원 ────────────────────────────────────
+    //
+    // 아래 테스트들은 **클라이언트와 손으로 맞춘 값**을 못 박는다. 한쪽만 바뀌면
+    // 화면과 판정이 갈라져 "분명히 맞았는데 안 죽는" 상태가 되는데, 클라이언트
+    // 테스트는 자기 파생끼리만 비교하므로 그 어긋남을 잡지 못한다. 대조는
+    // 여기서만 가능하다.
+
+    #[test]
+    fn 플레이어_체력은_클라이언트_규격을_따른다() {
+        // 클라이언트 `Player.baseMaxHp` = 10000.
+        assert_eq!(max_hp_for_level(1), 10_000);
+        // 클라이언트 `LevelGains.maxHp` = 1000 (레벨마다 정확히 1,000).
+        assert_eq!(max_hp_for_level(2), 11_000);
+        // 레벨 N 의 최대 체력 = 10,000 + (N-1) × 1,000.
+        assert_eq!(max_hp_for_level(30), 39_000);
+    }
+
+    #[test]
+    fn 플레이어_마력은_클라이언트_규격을_따른다() {
+        // 클라이언트 `Player.mp` 초기값 5000, `LevelGains.maxMp` = 600.
+        assert_eq!(max_mp_for_level(1), 5_000);
+        assert_eq!(max_mp_for_level(2), 5_600);
+        assert_eq!(max_mp_for_level(30), 22_400);
+    }
+
+    #[test]
+    fn 근접_피해는_5레벨마다_더_오른다() {
+        // 클라이언트 `Player.meleeDamage` = 26 에서 시작.
+        assert_eq!(player_damage(1), 26);
+        // 레벨 2~4 는 +4.5 씩. 26 + 4.5 = 30.5 → 31 (반올림).
+        assert_eq!(player_damage(2), 31);
+        // 레벨 5 는 강화 구간이라 +8.0. 26 + 4.5×3 + 8.0 = 47.5 → 48.
+        assert_eq!(player_damage(5), 48);
+        // 레벨 10 = 26 + 4.5×9 + 8.0×2 − 4.5×2 = 26 + 40.5 + 7 = 73.5 → 74.
+        assert_eq!(player_damage(10), 74);
+    }
+
+    #[test]
+    fn 원거리_피해도_같은_규칙이다() {
+        // 클라이언트 `Player.rangedDamage` = 18 에서 시작.
+        assert_eq!(player_ranged_damage(1), 18);
+        assert_eq!(player_ranged_damage(2), 21);
+        // 26 + ... 가 아니라 18 + 3×4 + 2.5 = 32.5 → 33 (레벨 5).
+        assert_eq!(player_ranged_damage(5), 33);
+    }
+
+    #[test]
+    fn 방어력_0이면_받는_피해가_그대로다() {
+        // 기획 규격: 방어력 0 인 플레이어가 받는 피해 = 몬스터의 레벨.
+        for level in [1, 3, 10, 200] {
+            assert_eq!(damage_after_defense(level, 0), level);
+        }
+    }
+
+    #[test]
+    fn 방어력이_상수와_같으면_피해가_절반이다() {
+        // 클라이언트 `Player.defenseConstant` = 100 과 같은 승수형 공식.
+        assert_eq!(damage_after_defense(100, DEFENSE_CONSTANT), 50);
+        // 감산형이 아니므로 방어력이 아무리 높아도 0 이 되지는 않는다.
+        assert!(damage_after_defense(200, 10_000) >= 0);
+    }
+
+    #[test]
+    fn 몬스터_체력은_클라이언트_곡선을_따른다() {
+        // 클라이언트 `MonsterCodex._statsFor`: baseHp = 26 + (lv-1)×23, drone ×0.72.
+        assert_eq!(monster_max_hp("drone", 1), (26.0f32 * 0.72).round() as i32);
+        // walker ×1.15, 레벨 10 → (26 + 9×23) × 1.15.
+        assert_eq!(
+            monster_max_hp("walker", 10),
+            ((26.0f32 + 9.0 * 23.0) * 1.15).round() as i32
+        );
+        // 계통이 셀수록 단단하다.
+        assert!(monster_max_hp("sovereign", 5) > monster_max_hp("siege", 5));
+        assert!(monster_max_hp("siege", 5) > monster_max_hp("walker", 5));
+        assert!(monster_max_hp("walker", 5) > monster_max_hp("drone", 5));
+    }
+
+    #[test]
+    fn 몬스터_경험치도_클라이언트_곡선을_따른다() {
+        // baseXp = 10 + (lv-1)×9, walker ×1.0.
+        assert_eq!(monster_xp("walker", 1), 10);
+        assert_eq!(monster_xp("walker", 10), 91);
+        // sovereign ×4.0.
+        assert_eq!(monster_xp("sovereign", 1), 40);
+    }
+
+    #[test]
+    fn 강화_구간_횟수는_5레벨마다_하나씩_는다() {
+        assert_eq!(milestones_upto(1), 0);
+        assert_eq!(milestones_upto(4), 0);
+        assert_eq!(milestones_upto(5), 1);
+        assert_eq!(milestones_upto(9), 1);
+        assert_eq!(milestones_upto(10), 2);
+    }
+
+    #[test]
+    fn 아는_스킬만_통과한다() {
+        assert!(skill_spec("plasma").is_some());
+        assert!(skill_spec(" PLASMA ").is_some());
+        assert!(skill_spec("meteor").is_none());
+        assert!(skill_spec("").is_none());
+    }
+
+    #[test]
+    fn 플라즈마는_클라이언트와_같은_마력을_쓴다() {
+        // 클라이언트 `Player.plasmaMpCost` = 60, `_shootCooldown` = 0.24 초.
+        let spec = skill_spec("plasma").unwrap();
+        assert_eq!(spec.mp_cost, 60);
+        assert_eq!(spec.cooldown_micros, 240_000);
+        // 사거리는 몹이 알아채는 거리보다 길어야 "보이는 적을 쏠 수 있다".
+        assert!(spec.range_tiles > MONSTER_AGGRO_TILES);
+    }
+
+    #[test]
+    fn 회복_비율은_클라이언트_규격과_같다() {
+        // 클라이언트 `RestRecovery`: HP 0.12/s, MP 0.15/s, 야전 MP 0.005/s.
+        assert_eq!(REST_HP_PER_MILLE, 120);
+        assert_eq!(REST_MP_PER_MILLE, 150);
+        assert_eq!(FIELD_MP_PER_MILLE, 5);
+        // 거점 회복이 야전보다 훨씬 빨라야 물러날 이유가 생긴다.
+        assert!(REST_MP_PER_MILLE > FIELD_MP_PER_MILLE * 10);
+    }
+
+    #[test]
+    fn 무적과_회복_대기는_클라이언트와_같다() {
+        // 클라이언트 `Player.respawnInvulnerability` = 2.0 초.
+        assert_eq!(RESPAWN_INVULNERABLE_MICROS, 2_000_000);
+        // 클라이언트 `RestRecovery.warmupAfterDamage` = 1.5 초.
+        assert_eq!(REST_WARMUP_MICROS, 1_500_000);
+    }
+
     #[test]
     fn 안전지대는_월드_한가운데_50타일이다() {
         let (cx, cy) = world_center();
@@ -1047,9 +2050,9 @@ mod tests {
 
     #[test]
     fn 계열이_셀수록_체력과_경험치가_크다() {
-        assert!(base_hp("sovereign") > base_hp("siege"));
-        assert!(base_hp("siege") > base_hp("walker"));
-        assert!(base_hp("walker") > base_hp("drone"));
+        assert!(hp_scale("sovereign") > hp_scale("siege"));
+        assert!(hp_scale("siege") > hp_scale("walker"));
+        assert!(hp_scale("walker") > hp_scale("drone"));
         assert!(monster_xp("sovereign", 1) > monster_xp("drone", 1));
     }
 
