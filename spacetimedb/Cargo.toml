@@ -1,0 +1,20 @@
+[package]
+name = "cyborg_module"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+spacetimedb = { version = "2.7.*" }
+# 비밀번호 해싱. 순수 Rust 구현이라 wasm32 타겟에서 그대로 동작한다.
+sha2 = { version = "0.10", default-features = false }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+log = "0.4"
+
+[profile.release]
+# wasm 모듈 크기를 줄인다. 배포 시간과 콜드 스타트에 직접 영향을 준다.
+opt-level = "z"
+lto = true
+codegen-units = 1

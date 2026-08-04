@@ -1,0 +1,5 @@
+{
+  "database": "withcenter-cyborg",
+  "server": "maincloud",
+  "module-path": "./spacetimedb"
+}

@@ -14,6 +14,33 @@ const double kHalfTileHeight = kTileHeight / 2;
 /// 그리드 z(고도) 1 단위가 화면에서 차지하는 픽셀 높이.
 const double kHeightUnit = 56.0;
 
+/// 타일 한 칸이 나타내는 실제 거리(미터).
+///
+/// 이동 속도(타일/초), 사거리, 시야 같은 게임 수치는 모두 타일 단위이므로
+/// 이 값이 1.0이라는 것은 "타일 = 미터"임을 뜻한다.
+const double kMetersPerTile = 1.0;
+
+/// 게임 월드 한 변의 길이(미터). 가로 1 km × 세로 1 km.
+const double kWorldSizeMeters = 1000.0;
+
+/// 월드 한 변의 타일 수. [kWorldSizeMeters] / [kMetersPerTile].
+const int kWorldTiles = 1000;
+
+/// 지면 렌더링과 구조물 스트리밍의 단위가 되는 청크 한 변의 타일 수.
+///
+/// 100만 타일을 한 번에 다룰 수 없으므로 월드를 이 크기의 격자로 나누고
+/// 카메라 근처의 청크만 그리거나 마운트한다.
+const int kChunkTiles = 32;
+
+/// 월드 한 변의 청크 수.
+const int kWorldChunks = (kWorldTiles + kChunkTiles - 1) ~/ kChunkTiles;
+
+/// 미터 단위 거리를 타일 단위로 변환한다.
+double metersToTiles(double meters) => meters / kMetersPerTile;
+
+/// 타일 단위 거리를 미터 단위로 변환한다.
+double tilesToMeters(double tiles) => tiles * kMetersPerTile;
+
 /// 그리드(논리) 좌표를 화면(월드) 좌표로 변환한다.
 ///
 /// 그리드 좌표는 타일 단위의 실수 좌표이며, [z]는 지면으로부터의 고도다.
@@ -50,6 +77,18 @@ Vector2 gridDirToScreenDir(Vector2 dir) {
     (dir.x - dir.y) * kHalfTileWidth,
     (dir.x + dir.y) * kHalfTileHeight,
   );
+}
+
+/// 화면상의 방향 벡터를 그리드 방향 벡터로 변환한다(평행이동 없음).
+///
+/// 조이스틱이나 키보드 입력처럼 화면 기준으로 들어온 방향을
+/// 그리드 좌표계의 이동 방향으로 바꿀 때 쓴다.
+Vector2 screenDirToGridDir(Vector2 dir) {
+  final a = dir.x / kHalfTileWidth;
+  final b = dir.y / kHalfTileHeight;
+  final result = Vector2((b + a) / 2, (b - a) / 2);
+  if (result.length2 > 1e-9) result.normalize();
+  return result;
 }
 
 /// 그리드 방향 벡터가 화면상 오른쪽을 향하는지 여부.

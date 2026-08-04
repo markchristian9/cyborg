@@ -1,0 +1,12 @@
+SpacetimeDB ID: c200801738abd6e5a9121d9c38cbb6de627440dcb19fda61e9af44e82f401de3
+
+
+1. Install SpacetimeDB
+curl -sSf https://install.spacetimedb.com | sh
+
+2. Set up project
+spacetime dev withcenter-cyborg --template chat-react-ts --server maincloud
+
+3. Tell the LLM to Build It For You
+claude "This folder is initialized with a basic SpacetimeDB project. Using this as a starting point build a full Discord clone with channels, threads, and real time messaging with React.js"
+
