@@ -24,6 +24,7 @@ import 'iso.dart';
 import 'level/ground_layer.dart';
 import 'level/level_map.dart';
 import 'level/safe_zone.dart';
+import 'level/world_tree.dart';
 import 'level/teleport_destinations.dart';
 import 'net/game_sync.dart';
 import 'net/leaderboard_source.dart';
@@ -64,8 +65,15 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     LeaderboardSource? leaderboard,
     int startTotalXp = 0,
     this.design = CyborgDesign.assault,
+    this.autoStart = false,
   })  : leaderboard = leaderboard ?? const EmptyLeaderboardSource(),
         _carriedTotalXp = startTotalXp;
+
+  /// 시작 메뉴를 건너뛰고 곧바로 월드에 들어갈지.
+  ///
+  /// 여러 클라이언트를 한꺼번에 띄울 때는 "접속하기" 를 눌러 줄 사람이 없다.
+  /// 그 판단은 게임 밖(`GameScreen`)에서 내리고, 여기서는 결과만 따른다.
+  final bool autoStart;
 
   /// 이번 출격에 쓰는 신체 프레임.
   ///
@@ -221,6 +229,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
     world.add(GroundLayer(map));
     world.add(SafeZoneField(map.safeZone));
+    // 월드 정중앙에 선 나무. 안전지대 한복판의 이정표다.
+    world.add(WorldTree(grid: map.worldCenter));
     // 빈 땅 클릭을 받아 내는 레이어. 월드 맨 아래에 깔려 UI 가 잡지 않은
     // 탭만 받는다.
     world.add(ClickMoveLayer());
@@ -244,8 +254,14 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _refreshBlockStreaming();
     _refreshMonsterStreaming();
 
-    overlays.add(Overlays.mainMenu);
-    pauseEngine();
+    if (autoStart) {
+      // 메뉴를 띄웠다 지우지 않고 곧장 들어간다. 한 프레임이라도 메뉴가 보이면
+      // 그 사이 엔진이 멈춰 있어, 여러 클라이언트가 서로 다른 시점에 출발한다.
+      startGame();
+    } else {
+      overlays.add(Overlays.mainMenu);
+      pauseEngine();
+    }
   }
 
   /// 물려받은 성장 상태를 채운 새 몸체를 만든다.
@@ -1397,6 +1413,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
     world.add(GroundLayer(map));
     world.add(SafeZoneField(map.safeZone));
+    // 월드 정중앙에 선 나무. 안전지대 한복판의 이정표다.
+    world.add(WorldTree(grid: map.worldCenter));
     world.add(ClickMoveLayer());
     world.add(MovePathHint());
     world.add(AutoHuntRangeField());

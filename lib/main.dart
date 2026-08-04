@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'auth/cyborg_gate.dart';
 import 'auth/cyborg_kind.dart';
 import 'auth/cyborg_session.dart';
+import 'dev/dev_login.dart';
 import 'game/action_rpg_game.dart';
 import 'game/net/spacetime_game_sync.dart';
 import 'game/palette.dart';
@@ -88,6 +89,9 @@ class _GameScreenState extends State<GameScreen> {
       leaderboard: client == null ? null : SpacetimeLeaderboard(client),
       startTotalXp: startTotalXp,
       design: kind.design,
+      // 앱이 스스로 로그인하고 캐릭터까지 골라 들어왔다면 시작 메뉴에서
+      // "접속하기" 를 눌러 줄 사람도 없다. 끝까지 스스로 들어간다.
+      autoStart: devAutopilotEnabled,
     )..characterName = character?.name.toUpperCase() ?? 'UNIT-01';
   }
 
