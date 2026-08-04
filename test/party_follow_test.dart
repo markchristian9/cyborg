@@ -6,8 +6,9 @@ import 'package:flutter_test/flutter_test.dart';
 ///
 /// 원격 플레이어 객체도 서버 타입도 쓰지 않는다 — 판단 규칙은 그 둘 중 무엇도
 /// 알 필요가 없고, 알게 만들면 이 검사를 돌리는 데 게임 전체가 필요해진다.
-FollowTarget _leader(double x, double y, {bool alive = true}) => FollowTarget(
-      characterId: 7,
+FollowTarget _leader(double x, double y, {bool alive = true, int id = 7}) =>
+    FollowTarget(
+      characterId: id,
       grid: Vector2(x, y),
       alive: alive,
     );
@@ -193,6 +194,75 @@ void main() {
       decision.destination!.setValues(999, 999);
 
       expect(leader.grid, Vector2(3, 4), reason: '사본을 줘야 원본이 안전하다');
+    });
+  });
+
+  group('추종 — 따라갈 사람이 바뀌었을 때', () {
+    test('파티장이 자리를 넘기면 진전을 처음부터 다시 잰다', () {
+      final follow = PartyFollowController();
+      final stuck = _leader(PartyFollowController.rejoinDistanceTiles + 5, 0);
+
+      // 옛 파티장에게 다가가지 못한 채 제한 시간 직전까지 버틴다.
+      final steps = (PartyFollowController.rejoinTimeout / (1 / 60)).ceil() - 5;
+      for (var i = 0; i < steps; i++) {
+        _step(follow, leader: stuck, self: Vector2(0, 0));
+      }
+
+      // 자리가 넘어갔다. 새 파티장이 더 멀더라도 곧바로 포기하면 안 된다.
+      final handedOver = _leader(
+        PartyFollowController.rejoinDistanceTiles + 30,
+        0,
+        id: 99,
+      );
+      final decision =
+          _step(follow, leader: handedOver, self: Vector2(0, 0));
+
+      expect(decision.action, PartyFollowAction.rejoin,
+          reason: '옛 사람에게 다가가던 기록을 그대로 쓰면 새 사람은 시작하자마자 놓친 것이 된다');
+    });
+
+    test('바뀐 뒤에도 제 시간을 다 쓰고 나서야 포기한다', () {
+      final follow = PartyFollowController();
+      final first = _leader(PartyFollowController.rejoinDistanceTiles + 5, 0);
+
+      for (var i = 0; i < 200; i++) {
+        _step(follow, leader: first, self: Vector2(0, 0));
+      }
+
+      final second = _leader(
+        PartyFollowController.rejoinDistanceTiles + 5,
+        0,
+        id: 99,
+      );
+
+      // 바뀐 직후 몇 프레임은 반드시 살아 있어야 한다.
+      for (var i = 0; i < 30; i++) {
+        final decision = _step(follow, leader: second, self: Vector2(0, 0));
+        expect(decision.action, PartyFollowAction.rejoin);
+      }
+    });
+  });
+
+  group('추종 — 쓰러졌다 되살아난 뒤', () {
+    test('되살아난 자리까지의 거리를 진전으로 오해하지 않는다', () {
+      final follow = PartyFollowController();
+
+      // 가까이 붙어 사냥하다가 파티장이 쓰러진다.
+      _step(follow, leader: _leader(3, 0), self: Vector2(0, 0));
+      _step(follow, leader: _leader(3, 0, alive: false), self: Vector2(0, 0));
+
+      // 안전지대에서 되살아나 멀어졌다. 따라붙기가 시작되고, 다가가는 동안
+      // 끊기지 않아야 한다.
+      var distance = PartyFollowController.rejoinDistanceTiles + 30;
+      for (var i = 0; i < 60; i++) {
+        final decision = _step(
+          follow,
+          leader: _leader(distance, 0),
+          self: Vector2(0, 0),
+        );
+        expect(decision.action, PartyFollowAction.rejoin);
+        distance -= 0.6;
+      }
     });
   });
 

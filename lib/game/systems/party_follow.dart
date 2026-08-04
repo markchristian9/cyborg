@@ -120,6 +120,13 @@ class PartyFollowController {
   /// 지금 따라붙는 중(사냥을 접은 상태)인가.
   bool _rejoining = false;
 
+  /// 지금 따라가고 있는 상대.
+  ///
+  /// 상대가 바뀌었는지 보려고 들고 있다. 파티장이 자리를 넘기면 따라갈 사람이
+  /// 바뀌는데, 그때 이전 사람에게 다가가던 기록을 그대로 쓰면 새 사람이 그보다
+  /// 멀다는 이유만으로 "진전이 없다" 로 읽혀 곧바로 놓친 것이 된다.
+  int? _targetId;
+
   /// 지금 따라붙는 중인가. 화면에 상태를 보여 줄 때 쓴다.
   bool get isRejoining => _rejoining;
 
@@ -132,6 +139,7 @@ class PartyFollowController {
     _rejoinTime = 0;
     _bestDistance = double.infinity;
     _rejoining = false;
+    _targetId = null;
   }
 
   /// 한 프레임을 진행시키고 이번에 할 일을 돌려준다.
@@ -158,6 +166,14 @@ class PartyFollowController {
       );
     }
 
+    // 따라갈 사람이 바뀌었으면(파티장 위임) 처음부터 다시 잰다.
+    if (leader.characterId != _targetId) {
+      _targetId = leader.characterId;
+      _rejoinTime = 0;
+      _bestDistance = double.infinity;
+      _rejoining = false;
+    }
+
     final distance = (leader.grid - selfGrid).length;
 
     // ② 상대가 쓰러져 있다. 사냥 중심을 옮기지 않고 그대로 둔다.
@@ -165,8 +181,12 @@ class PartyFollowController {
     // 여기서 추종을 끊지 않는 이유는, 상대가 곧 안전지대에서 되살아나기 때문이다.
     // 끊어 버리면 다 같이 물러나는 대신 각자 흩어진다. 되살아나면 그 자리가 새
     // 중심이 되어 자연히 안전지대로 모인다.
+    //
+    // 다가가던 기록도 함께 지운다. 되살아나는 자리는 쓰러진 자리가 아니라
+    // 안전지대라, 그 사이의 거리 변화는 따라붙기의 진전과 아무 관계가 없다.
     if (!leader.alive) {
       _rejoinTime = 0;
+      _bestDistance = double.infinity;
       return const PartyFollowDecision(PartyFollowAction.hold);
     }
 

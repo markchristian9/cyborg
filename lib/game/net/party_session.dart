@@ -1,5 +1,12 @@
 import 'package:flutter/foundation.dart';
 
+/// 한 파티의 최대 인원.
+///
+/// **서버 `party.rs` 의 `MAX_PARTY_SIZE` 와 같아야 한다.** 판정은 서버가 하므로
+/// 이 값이 크면 화면에서 초대해 놓고 서버에 거절당하고, 작으면 들어갈 수 있는
+/// 사람을 화면이 먼저 막는다. 둘 중 무엇도 사용자에게는 고장으로 보인다.
+const int kMaxPartySize = 12;
+
 /// 파티에 속한 한 사람.
 ///
 /// 이름도 레벨도 좌표도 없다. **일부러다.** 서버의 파티 view 는 멤버십만 실어
@@ -75,6 +82,9 @@ abstract class PartySession {
 
   /// 나를 포함한 파티원 전원.
   List<PartyMemberInfo> get members => const [];
+
+  /// 자리가 다 찼는가.
+  bool get isFull => members.length >= kMaxPartySize;
 
   /// 나에게 온 초대.
   List<PartyInviteInfo> get invites => const [];

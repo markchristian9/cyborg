@@ -58,9 +58,13 @@ use crate::session__view;
 /// 한 파티에 들어갈 수 있는 최대 인원.
 ///
 /// 라리엔은 32 명이지만 그것은 Flutter 오버레이로 목록을 그리기 때문이다. 여기는
-/// Flame 캔버스에 직접 그리므로 스크롤과 잘림을 손으로 만들어야 하고, 무엇보다
-/// 추종은 인원이 늘수록 한 사람에게 몰려 서는 그림이 된다. 작게 시작한다.
-pub const MAX_PARTY_SIZE: usize = 6;
+/// Flame 캔버스에 직접 그리므로 목록의 스크롤과 잘림을 손으로 만들어야 한다.
+///
+/// 이 수는 화면 한 칸에 몇 명을 그릴 수 있느냐가 아니라 **한 사람을 따라다니는
+/// 무리가 몇 명까지 그림이 되느냐**로 정한다. 추종은 인원이 늘수록 파티장 주위에
+/// 겹쳐 서므로, 그 덩어리가 사냥터 하나를 덮을 정도가 되면 다른 사람의 사냥이
+/// 성립하지 않는다.
+pub const MAX_PARTY_SIZE: usize = 12;
 
 /// 초대가 살아 있는 시간(마이크로초). 20 초.
 ///
@@ -99,7 +103,8 @@ pub struct PartyMember {
     #[primary_key]
     pub character_id: u64,
 
-    #[index(btree)]
+    // 인덱스는 표 수준 `by_party` 하나로 충분하다. 여기에 또 붙이면 같은 열에
+    // 같은 이름의 인덱스가 두 번 생겨 배포가 거부된다.
     pub party_id: u64,
 
     pub joined_at: Timestamp,
@@ -138,7 +143,7 @@ pub struct PartyInvite {
     /// 다시 계산되어 밀려온다. 초대는 20 초짜리라 그동안 이름이 바뀔 일도 없다.
     pub from_name: String,
 
-    #[index(btree)]
+    // 표 수준 `by_target` 이 이 열을 이미 덮는다.
     pub to_character_id: u64,
 
     pub created_at: Timestamp,
@@ -505,6 +510,8 @@ pub fn promote_leader(ctx: &ReducerContext, target_character_id: u64) -> Result<
         return Err("그 캐릭터는 내 파티가 아니다.".to_string());
     }
 
+    let old_leader = party.leader_character_id;
+
     ctx.db.party().id().update(Party {
         leader_character_id: target_character_id,
         ..party
@@ -515,6 +522,32 @@ pub fn promote_leader(ctx: &ReducerContext, target_character_id: u64) -> Result<
         ctx.db.party_member().character_id().update(PartyMember {
             following_character_id: None,
             ..target
+        });
+    }
+
+    // 옛 파티장을 따라가던 사람들을 새 파티장에게 넘긴다.
+    //
+    // 이들의 의사는 "저 사람" 이 아니라 **파티장을 따라가겠다**는 것이었다. 그대로
+    // 두면 기록은 옛 파티장을 가리키는데 화면은 새 파티장을 따라가는, 서로 다른
+    // 두 이야기가 된다. 자리를 넘기는 것은 파티장이 스스로 한 일이고 파티는
+    // 그대로이므로 따라가던 의사도 이어진다.
+    //
+    // 파티장이 **나가는** 경우는 다르게 다룬다([`remove_member`]) — 그때는 파티가
+    // 깨진 상황이라, 동의한 적 없는 사람을 자동으로 따라가게 하지 않는다.
+    let followers: Vec<PartyMember> = ctx
+        .db
+        .party_member()
+        .by_party()
+        .filter(party.id)
+        .filter(|m| {
+            m.following_character_id == Some(old_leader)
+                && m.character_id != target_character_id
+        })
+        .collect();
+    for member in followers {
+        ctx.db.party_member().character_id().update(PartyMember {
+            following_character_id: Some(target_character_id),
+            ..member
         });
     }
 
@@ -669,6 +702,21 @@ fn clear_invites_for(ctx: &ReducerContext, character_id: u64) {
     }
 }
 
+/// 파티장이 빠졌을 때 자리를 이어받을 사람을 고른다.
+///
+/// 가장 오래 있은 사람이며, 같은 시각에 들어온 둘이 있으면 캐릭터 번호가 작은
+/// 쪽이다. 동점을 가르는 규칙이 필요한 이유는 **누가 이어받을지가 실행할 때마다
+/// 달라지면 안 되기** 때문이다 — 표를 훑는 순서는 보장되지 않으므로, 규칙 없이
+/// 첫 줄을 집으면 같은 상황에서 다른 답이 나올 수 있다.
+///
+/// 인자를 `(들어온 시각, 캐릭터 번호)` 로 받는 것은 이 규칙만 따로 검사하기
+/// 위해서다. 표 행을 받으면 데이터베이스 없이는 확인할 수 없다.
+fn pick_next_leader(mut seats: Vec<(i64, u64)>) -> Option<u64> {
+    // 튜플의 사전식 정렬이 곧 "먼저 들어온 순, 동점이면 번호 순" 이다.
+    seats.sort_unstable();
+    seats.first().map(|(_, character_id)| *character_id)
+}
+
 /// 멤버 한 명을 빼고, 그 결과로 파티가 성립하지 않으면 정리한다.
 ///
 /// 여기 한 곳에 모아 둔 이유는 탈퇴·추방·(나중에) 접속 종료가 모두 같은 뒤처리를
@@ -677,7 +725,7 @@ fn clear_invites_for(ctx: &ReducerContext, character_id: u64) {
 fn remove_member(ctx: &ReducerContext, party_id: u64, character_id: u64) {
     ctx.db.party_member().character_id().delete(character_id);
 
-    let mut remaining: Vec<PartyMember> =
+    let remaining: Vec<PartyMember> =
         ctx.db.party_member().by_party().filter(party_id).collect();
 
     // 혼자 남았거나 아무도 없으면 파티를 접는다.
@@ -706,16 +754,15 @@ fn remove_member(ctx: &ReducerContext, party_id: u64, character_id: u64) {
         return;
     };
 
-    // 나간 사람이 파티장이었으면 가장 오래 있은 사람이 이어받는다. 같은 시각에
-    // 들어온 두 사람이 있을 수 있으므로 `character_id` 로 동점을 가른다 —
-    // 그래야 누가 이어받을지가 실행할 때마다 달라지지 않는다.
+    // 나간 사람이 파티장이었으면 가장 오래 있은 사람이 이어받는다.
     if party.leader_character_id == character_id {
-        remaining.sort_by(|a, b| {
-            a.joined_at
-                .cmp(&b.joined_at)
-                .then(a.character_id.cmp(&b.character_id))
-        });
-        let next = remaining[0].character_id;
+        let seats: Vec<(i64, u64)> = remaining
+            .iter()
+            .map(|m| (m.joined_at.to_micros_since_unix_epoch(), m.character_id))
+            .collect();
+        let Some(next) = pick_next_leader(seats) else {
+            return;
+        };
         ctx.db.party().id().update(Party {
             leader_character_id: next,
             ..party
@@ -754,10 +801,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 파티_정원은_추종이_보이는_크기다() {
-        // 한 사람을 따라 여럿이 붙어 서는 그림이라, 화면에 담기는 만큼만 받는다.
-        assert!(MAX_PARTY_SIZE >= 2, "둘이 안 되면 파티가 아니다");
-        assert!(MAX_PARTY_SIZE <= 8);
+    fn 파티_정원은_열두명이다() {
+        assert_eq!(MAX_PARTY_SIZE, 12);
+    }
+
+    #[test]
+    fn 파티장은_가장_오래_있은_사람이_이어받는다() {
+        // (들어온 시각, 캐릭터 번호)
+        let seats = vec![(300, 11), (100, 42), (200, 7)];
+        assert_eq!(pick_next_leader(seats), Some(42));
+    }
+
+    #[test]
+    fn 같은_시각에_들어왔으면_번호가_작은_쪽이_이어받는다() {
+        let seats = vec![(100, 9), (100, 3), (100, 5)];
+        assert_eq!(pick_next_leader(seats), Some(3));
+    }
+
+    #[test]
+    fn 훑는_순서가_달라도_같은_사람이_이어받는다() {
+        // 표를 훑는 순서는 보장되지 않는다. 그 순서가 답을 바꾸면 안 된다.
+        let forward = vec![(100, 9), (100, 3), (200, 1)];
+        let backward = vec![(200, 1), (100, 3), (100, 9)];
+        assert_eq!(pick_next_leader(forward), pick_next_leader(backward));
+    }
+
+    #[test]
+    fn 남은_사람이_없으면_이어받을_사람도_없다() {
+        assert_eq!(pick_next_leader(Vec::new()), None);
     }
 
     #[test]
