@@ -6,7 +6,21 @@ class MainFlutterWindow: NSWindow {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
-    self.setFrame(tiledFrame() ?? windowFrame, display: true)
+    if let tiled = tiledFrame() {
+      // 자리를 지정받았다면 macOS 의 창 복원이 끼어들어서는 안 된다. 복원은
+      // 번들 식별자 하나에 자리 하나를 기억하므로, 클라이언트를 여러 개 띄우면
+      // 전부 같은 자리로 되돌아가 완전히 겹쳐 버린다(실측으로 확인했다).
+      self.isRestorable = false
+      self.setFrame(tiled, display: true)
+
+      // 복원은 awakeFromNib 보다 늦게 올 수 있다. 다음 런루프에서 한 번 더
+      // 확정해 뒤늦은 덮어쓰기까지 막는다.
+      DispatchQueue.main.async { [weak self] in
+        self?.setFrame(tiled, display: true)
+      }
+    } else {
+      self.setFrame(windowFrame, display: true)
+    }
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
@@ -26,8 +40,8 @@ class MainFlutterWindow: NSWindow {
           let visible = (self.screen ?? NSScreen.main)?.visibleFrame
     else { return nil }
 
-    let width = CGFloat(Double(env["CYBORG_TILE_WIDTH"] ?? "") ?? 600)
-    let height = CGFloat(Double(env["CYBORG_TILE_HEIGHT"] ?? "") ?? 500)
+    let width = CGFloat(Double(env["CYBORG_TILE_WIDTH"] ?? "") ?? 500)
+    let height = CGFloat(Double(env["CYBORG_TILE_HEIGHT"] ?? "") ?? 600)
 
     // 한 줄에 몇 개가 들어가는지는 화면이 정한다. 창 크기는 요청받은 값 그대로
     // 두고, 자리 수만 화면에 맞춘다.
@@ -53,6 +67,8 @@ class MainFlutterWindow: NSWindow {
     // macOS 좌표는 아래에서 위로 자란다. 첫 줄이 화면 위쪽에 오도록 뒤집는다.
     let y = visible.maxY - height - CGFloat(row) * (height + gapY) - cascade
 
-    return NSRect(x: x, y: y, width: width, height: height)
+    let frame = NSRect(x: x, y: y, width: width, height: height)
+    NSLog("[CYBORG] 창 자리 %d → %@", index, NSStringFromRect(frame))
+    return frame
   }
 }

@@ -24,8 +24,8 @@ PASSWORD='12345a,*'
 DOMAIN="test.com"
 KIND="male_cyborg"
 FLAVOR="release"      # release | debug | profile
-WIDTH=600
-HEIGHT=500
+WIDTH=500
+HEIGHT=600
 STAGGER=1.0           # 인스턴스 사이 실행 간격(초)
 DO_BUILD=1
 DO_STOP=0
@@ -55,8 +55,8 @@ usage() {
   --password <값>     모든 계정에 쓸 비밀번호 (기본 '12345a,*', 8자 이상)
   --domain <도메인>   이메일 도메인 (기본 test.com)
   --kind <male|female> 캐릭터 외형 (기본 male)
-  --width <px>        창 너비 (기본 600)
-  --height <px>       창 높이 (기본 500)
+  --width <px>        창 너비 (기본 500)
+  --height <px>       창 높이 (기본 600)
   --stagger <초>      인스턴스 사이 실행 간격 (기본 1.0)
   --debug             디버그 빌드로 실행 (기본은 release)
   --profile           프로파일 빌드로 실행
