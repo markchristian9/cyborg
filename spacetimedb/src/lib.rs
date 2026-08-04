@@ -20,6 +20,7 @@
 pub mod auth;
 pub mod character;
 pub mod leaderboard;
+pub mod party;
 pub mod world;
 
 use spacetimedb::{Identity, ReducerContext, Timestamp, ViewContext, view};
