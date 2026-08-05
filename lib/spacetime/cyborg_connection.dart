@@ -31,6 +31,32 @@ const List<String> kCyborgViewSubscriptions = [
   'SELECT * FROM my_characters',
 ];
 
+/// 월드에 들어가 있는 동안 거는 구독.
+///
+/// `world_player` 는 공개 표라 **모든 접속자의 좌표**가 온다. 하나의 월드를
+/// 여럿이 공유하므로 서로 어디 있는지는 보여야 하는 정보다. 월드 밖(로그인·
+/// 캐릭터 선택 화면)에서는 필요 없으므로 입장할 때 걸고 나갈 때 푼다.
+const List<String> kWorldSubscriptions = [
+  'SELECT * FROM world_player',
+  // 몬스터도 **서버가 진실**이다. 클라이언트가 따로 만들어 내면 A 가 잡은 몹이
+  // B 화면에 살아 있게 되고, 그러면 같은 대상을 함께 때리는 일이 성립하지 않는다.
+  'SELECT * FROM monster',
+];
+
+/// 파티에 관한 구독. 월드에 들어가 있는 동안 함께 건다.
+///
+/// [kWorldSubscriptions] 와 한 배열로 합치지 않는다. 파티 표는 공개 표가 아니라
+/// **자기 파티만 보여 주는 view** 라 성격이 다르고, 무엇보다 두 목록을 한 곳에
+/// 두면 월드와 파티를 각각 손보는 사람이 같은 줄에서 부딪친다.
+///
+/// view 도 구독해야 행이 온다 — 걸지 않으면 서버에 파티가 있어도 화면에는
+/// 아무것도 없는, "파티가 없는 것" 과 구별되지 않는 상태가 된다.
+const List<String> kPartySubscriptions = [
+  'SELECT * FROM my_party',
+  'SELECT * FROM my_party_members',
+  'SELECT * FROM my_party_invites',
+];
+
 /// 리더보드 화면이 떠 있는 동안에만 거는 구독.
 ///
 /// 순위표는 **누가 레벨업하든** 다시 계산되어 구독자 전원에게 밀려온다. 월드에

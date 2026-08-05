@@ -423,6 +423,68 @@ pub struct Monster {
     pub chunk: u32,
 }
 
+/// 바닥에 떨어진 전리품 하나.
+///
+/// **드롭도 서버가 정한다.** 클라이언트가 각자 굴리면 같은 몹을 잡고도 사람마다
+/// 다른 것을 줍게 되고, 무엇이 떨어졌는지 서로 보이지 않아 "네가 먹어라" 도
+/// 성립하지 않는다.
+#[spacetimedb::table(
+    accessor = loot,
+    public,
+    index(accessor = by_chunk, btree(columns = [chunk]))
+)]
+pub struct Loot {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+
+    /// 클라이언트 `PickupKind` 의 이름. 아는 값만 들어간다([`LOOT_KINDS`]).
+    pub kind: String,
+
+    /// 회복량·점수 등 종류에 따른 크기.
+    pub amount: u32,
+
+    pub grid_x: f32,
+    pub grid_y: f32,
+
+    /// 공간 청크. 주변 전리품만 훑기 위한 것으로 몬스터와 같은 방식이다.
+    pub chunk: u32,
+
+    /// 이 시각까지는 **선점자만** 주울 수 있다.
+    ///
+    /// 잡은 사람이 다가가는 동안 옆에 있던 사람이 낚아채면 선점 규칙이
+    /// 무의미해진다. 잠깐의 우선권을 준 뒤 모두에게 연다.
+    pub reserved_until: Timestamp,
+
+    /// 우선권을 가진 캐릭터. 몹을 선점했던 사람이다.
+    pub reserved_for: Option<u64>,
+
+    pub dropped_at: Timestamp,
+}
+
+/// 서버가 인정하는 전리품 종류. 클라이언트 `PickupKind` 와 이름이 같아야 한다.
+pub const LOOT_KINDS: [&str; 10] = [
+    "nanoVial",
+    "nanoCanister",
+    "repairCell",
+    "regenAmpoule",
+    "overhaulKit",
+    "energyCell",
+    "overchargeCell",
+    "combatStim",
+    "dataChip",
+    "scrapCore",
+];
+
+/// 전리품이 바닥에 남아 있는 시간(마이크로초). 3 분.
+const LOOT_TTL_MICROS: i64 = 180_000_000;
+
+/// 잡은 사람이 우선권을 갖는 시간(마이크로초). 12 초.
+const LOOT_RESERVE_MICROS: i64 = 12_000_000;
+
+/// 주울 수 있는 거리(타일).
+const LOOT_PICKUP_TILES: f32 = 2.5;
+
 /// 서버가 확정한 킬 기록.
 ///
 /// "누가 잡았는가" 의 **정답**이다. 클라이언트가 무엇을 그렸든 이 표에 남은
@@ -1228,6 +1290,9 @@ pub fn attack_monster(ctx: &ReducerContext, monster_id: u64) -> Result<(), Strin
 
     let kind = monster.kind.clone();
     let level = monster.level;
+    // 쓰러진 자리. 전리품을 여기 떨궈야 하는데 아래 update 가 행을 가져가므로
+    // 미리 빼 둔다.
+    let (mx, my) = (monster.grid_x, monster.grid_y);
     ctx.db.monster().id().update(monster);
 
     ctx.db.world_player().identity().update(WorldPlayer {
@@ -1236,7 +1301,7 @@ pub fn attack_monster(ctx: &ReducerContext, monster_id: u64) -> Result<(), Strin
     });
 
     if let Some((owner, stealer)) = killed {
-        award_kill(ctx, owner, stealer, &kind, level);
+        award_kill(ctx, owner, stealer, &kind, level, mx, my);
     }
 
     Ok(())
@@ -1350,6 +1415,9 @@ pub fn cast_skill(
 
     let kind = monster.kind.clone();
     let level = monster.level;
+    // 쓰러진 자리. 전리품을 여기 떨궈야 하는데 아래 update 가 행을 가져가므로
+    // 미리 빼 둔다.
+    let (mx, my) = (monster.grid_x, monster.grid_y);
     ctx.db.monster().id().update(monster);
 
     ctx.db.world_player().identity().update(WorldPlayer {
@@ -1359,7 +1427,7 @@ pub fn cast_skill(
     });
 
     if let Some((owner, stealer)) = killed {
-        award_kill(ctx, owner, stealer, &kind, level);
+        award_kill(ctx, owner, stealer, &kind, level, mx, my);
     }
 
     Ok(())
@@ -1582,6 +1650,115 @@ pub fn monster_ai(ctx: &ReducerContext, _timer: MonsterAiTimer) {
     }
 }
 
+/// 쓰러진 자리에 전리품을 떨군다.
+///
+/// 종류와 양은 **서버가 굴린다.** 클라이언트가 각자 굴리면 같은 몹을 잡고도
+/// 사람마다 다른 것을 보게 되어, 무엇이 떨어졌는지를 두고 이야기할 수조차 없다.
+///
+/// 잡은 사람에게 잠깐 우선권을 준다([`LOOT_RESERVE_MICROS`]). 다가가는 사이
+/// 옆 사람이 낚아채면 선점 규칙이 무의미해지고, 그렇다고 영원히 묶어 두면
+/// 자리를 뜬 뒤 아무도 못 줍는 쓰레기가 쌓인다.
+fn spawn_loot(
+    ctx: &ReducerContext,
+    monster_kind: &str,
+    monster_level: u32,
+    owner: u64,
+    x: f32,
+    y: f32,
+) {
+    // 강한 계열일수록 더 많이, 더 좋은 것을 떨군다.
+    let rolls = match monster_kind {
+        "sovereign" => 4,
+        "siege" => 2,
+        _ => 1,
+    };
+
+    for i in 0..rolls {
+        // 절반 확률로 거른다. 매번 떨구면 바닥이 전리품으로 덮인다.
+        if i > 0 && ctx.random::<u32>() % 100 < 40 {
+            continue;
+        }
+
+        let roll = ctx.random::<u32>() % 100;
+        let (kind, base) = if roll < 34 {
+            ("nanoVial", 100)
+        } else if roll < 54 {
+            ("energyCell", 60)
+        } else if roll < 70 {
+            ("dataChip", 20)
+        } else if roll < 82 {
+            ("nanoCanister", 200)
+        } else if roll < 90 {
+            ("scrapCore", 40)
+        } else if roll < 95 {
+            ("repairCell", 400)
+        } else if roll < 98 {
+            ("combatStim", 1)
+        } else {
+            ("overhaulKit", 1200)
+        };
+
+        // 레벨이 높은 사냥터일수록 벌이가 낫다. 더 위험한 곳으로 나갈 이유다.
+        let amount = base + base * monster_level / 40;
+
+        // 한자리에 겹쳐 두면 한 덩어리로 보인다. 조금씩 흩어 놓는다.
+        let ox = (ctx.random::<u32>() % 5) as f32 - 2.0;
+        let oy = (ctx.random::<u32>() % 5) as f32 - 2.0;
+        let lx = (x + ox).clamp(WORLD_EDGE_MARGIN, PLAYABLE_MAX);
+        let ly = (y + oy).clamp(WORLD_EDGE_MARGIN, PLAYABLE_MAX);
+
+        ctx.db.loot().insert(Loot {
+            id: 0,
+            kind: kind.to_string(),
+            amount,
+            grid_x: lx,
+            grid_y: ly,
+            chunk: chunk_of(lx, ly),
+            reserved_until: ctx.timestamp
+                + TimeDuration::from_micros(LOOT_RESERVE_MICROS),
+            reserved_for: Some(owner),
+            dropped_at: ctx.timestamp,
+        });
+    }
+}
+
+/// 바닥의 전리품을 줍는다.
+///
+/// 거리와 우선권을 **서버가 본다.** 같은 것을 두 사람이 동시에 주우면 트랜잭션이
+/// 직렬화되어, 먼저 커밋된 쪽이 행을 지우고 나중 호출은 없는 것을 보고 실패한다.
+/// 둘 다 얻거나 둘 다 놓치는 상태는 생기지 않는다.
+#[spacetimedb::reducer]
+pub fn pick_loot(ctx: &ReducerContext, loot_id: u64) -> Result<(), String> {
+    let me = require_world_player(ctx)?;
+    if !me.alive {
+        return Err("쓰러진 상태다.".to_string());
+    }
+
+    let loot = ctx
+        .db
+        .loot()
+        .id()
+        .find(loot_id)
+        .ok_or_else(|| "이미 없어진 전리품이다.".to_string())?;
+
+    if dist_sq(me.grid_x, me.grid_y, loot.grid_x, loot.grid_y)
+        > LOOT_PICKUP_TILES * LOOT_PICKUP_TILES
+    {
+        return Err("너무 멀다.".to_string());
+    }
+
+    // 우선권이 남아 있으면 주인만 주울 수 있다.
+    if ctx.timestamp < loot.reserved_until
+        && loot.reserved_for.is_some()
+        && loot.reserved_for != Some(me.character_id)
+    {
+        return Err("아직 임자가 있다.".to_string());
+    }
+
+    ctx.db.loot().id().delete(loot_id);
+    Ok(())
+}
+
 /// `(fx, fy)` 에서 `(tx, ty)` 쪽으로 `step` 만큼 나아간 좌표.
 ///
 /// 목표를 지나치지 않는다 — 지나치면 목표 주위에서 떨리게 된다.
@@ -1659,6 +1836,19 @@ pub fn regen_tick(ctx: &ReducerContext, _timer: RegenTimer) {
 /// 쓰러진 몹을 되살린다.
 #[spacetimedb::reducer]
 pub fn monster_tick(ctx: &ReducerContext, _timer: MonsterTickTimer) {
+    // 아무도 줍지 않은 전리품을 치운다. 두지 않으면 표가 끝없이 자란다.
+    let loot_cutoff = ctx.timestamp - TimeDuration::from_micros(LOOT_TTL_MICROS);
+    let stale: Vec<u64> = ctx
+        .db
+        .loot()
+        .iter()
+        .filter(|l| l.dropped_at < loot_cutoff)
+        .map(|l| l.id)
+        .collect();
+    for id in stale {
+        ctx.db.loot().id().delete(id);
+    }
+
     let cutoff = ctx.timestamp - TimeDuration::from_micros(RESPAWN_MICROS);
 
     // 죽은 지 오래된 것부터 훑는다. 전체를 스캔하지 않도록 인덱스를 쓴다.
@@ -1787,6 +1977,8 @@ fn award_kill(
     last_hit_by: Option<u64>,
     monster_kind: &str,
     monster_level: u32,
+    mx: f32,
+    my: f32,
 ) {
     let xp = monster_xp(monster_kind, monster_level);
 
@@ -1828,6 +2020,8 @@ fn award_kill(
             });
         }
     }
+
+    spawn_loot(ctx, monster_kind, monster_level, owner_character_id, mx, my);
 
     ctx.db.monster_kill().insert(MonsterKill {
         id: 0,

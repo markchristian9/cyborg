@@ -8,6 +8,7 @@ import 'package:flame/events.dart';
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:spacetimedb_sdk/spacetimedb_sdk.dart';
 
 import 'audio/game_audio.dart';
 import 'entities/block.dart';
@@ -39,9 +40,10 @@ import 'systems/hit_stop.dart';
 import 'systems/inventory.dart';
 import 'systems/level_system.dart';
 import 'systems/monster_codex.dart';
-import 'systems/monster_population.dart';
+import '../spacetime/reducer_error.dart';
 import 'ui/auto_hunt_control.dart';
 import 'ui/character_screen.dart';
+import 'ui/party_panel.dart';
 import 'ui/hud.dart';
 import 'ui/inventory_ui.dart';
 import 'ui/leaderboard_screen.dart';
@@ -124,6 +126,12 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   late LeaderboardScreen _leaderboardScreen;
   late TeleportSheet _teleportSheet;
   late WorldMenu _worldMenu;
+
+  /// 파티를 보고 다루는 패널. 월드 메뉴에서 연다.
+  late PartyPanel _partyPanel;
+
+  /// 받은 초대를 알리는 카드. 열어 보지 않아도 스스로 뜬다.
+  late PartyInviteCard _partyInviteCard;
   late AutoHuntButton _autoHuntButton;
   late AutoHuntRadiusButton _autoHuntRadiusUp;
   late AutoHuntRadiusButton _autoHuntRadiusDown;
@@ -140,9 +148,6 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 여기에 현재 값을 옮겨 담지 않으면 재시작할 때마다 출격 시점으로 후퇴하고,
   /// 그러면 서버가 뒤로 가는 보고를 버려 순위가 다시 멈춘다.
   int _carriedTotalXp;
-
-  /// 월드 전역에 상주하는 로봇 개체군의 장부.
-  late MonsterPopulation population;
 
   /// 회수한 포션을 담아 두는 가방.
   final Inventory inventory = Inventory();
@@ -196,8 +201,6 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 시야보다 넉넉히 잡아 둔다.
   static const double _blockStreamMargin = 16;
 
-  /// 상주 로봇을 깨울 반경(미터).
-  static const double _monsterActivationRadius = 46;
 
   /// 이 거리보다 멀어지면 다시 잠재운다. 경계에서 깜빡이지 않도록 활성
   /// 반경보다 넓게 둔다.
@@ -230,7 +233,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   final Vector2 _keyboardInput = Vector2.zero();
 
   /// 월드 전역에 남아 있는 로봇 수(멀리 있어 잠들어 있는 개체 포함).
-  int get worldMonsterCount => population.aliveCount;
+  int get worldMonsterCount =>
+      presence.monsters.where((m) => m.alive).length;
 
   @override
   Color backgroundColor() => GamePalette.skyLow;
@@ -241,7 +245,6 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     await GameAudio.init();
 
     map = LevelMap.generate();
-    population = MonsterPopulation.generate(map);
 
     world.add(GroundLayer(map));
     world.add(SafeZoneField(map.safeZone));
@@ -432,12 +435,19 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _characterScreen = CharacterScreen();
     _leaderboardScreen = LeaderboardScreen(source: leaderboard);
     _teleportSheet = TeleportSheet();
+    _partyPanel = PartyPanel();
+    _partyInviteCard = PartyInviteCard();
     _worldMenu = WorldMenu(
       entries: [
         WorldMenuEntry(
           label: '캐릭터 정보',
           icon: WorldMenuIcon.character,
           onSelected: openCharacterScreen,
+        ),
+        WorldMenuEntry(
+          label: '파티',
+          icon: WorldMenuIcon.character,
+          onSelected: togglePartyPanel,
         ),
         WorldMenuEntry(
           label: '리더보드',
@@ -463,6 +473,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       PotionQuickBar(),
       BuffBar(),
       _worldMenu,
+      _partyPanel,
+      _partyInviteCard,
       _inventoryPanel,
       _characterScreen,
       _leaderboardScreen,
@@ -501,6 +513,12 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 월드 메뉴는 우상단 미니맵 바로 아래에 붙인다.
     _worldMenu.position = Vector2(size.x - 18, 168);
     // 퀵슬롯과 버프 표시는 화면 크기에 맞춰 스스로 자리를 잡는다.
+
+    // 파티 패널은 좌상단 생존 정보 패널 아래에 둔다. 전투 시야를 가리지 않는
+    // 자리이면서, 파티원이 늘어 아래로 자라도 조이스틱과 겹치지 않는다.
+    _partyPanel.position = Vector2(10, 132);
+    // 초대는 화면 한가운데 위쪽에 띄운다 — 20 초 만에 사라지므로 눈에 걸려야 한다.
+    _partyInviteCard.position = Vector2(size.x / 2, 16);
 
     // 탭 차폐막을 조이스틱·HUD 패널 위에 다시 맞춘다.
     for (final shield in camera.viewport.children.whereType<TapShield>()) {
@@ -559,7 +577,6 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _pruneRemoved();
     _updateCamera(dt);
     _updateStreaming(dt);
-    population.tick(dt);
     sync?.tick(dt, this);
 
     // 내 위치를 알리고, 남들이 어디 있는지 받아 온다. 이 두 줄이 "같은 월드에
@@ -760,7 +777,10 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         // 멈춰 서면 [Player.facing] 이 갱신되지 않는다. 근접 판정은 전방
         // 부채꼴이므로, 돌려 세우지 않으면 옆에 붙은 대상을 계속 헛친다.
         player.faceTowards(autoHunt.gridOf(decision.target!));
-        player.tryMelee();
+        // 노리는 몹을 그대로 넘긴다. 넘기지 않으면 스윙마다 부채꼴 안 몹
+        // 수만큼 서버 공격 요청이 나가고, 서버는 공격 쿨다운으로 첫 건 말고
+        // 전부 거절한다 — 자동 사냥은 쉬지 않으므로 그 낭비가 계속 쌓인다.
+        player.tryMelee(target: decision.target);
     }
   }
 
@@ -879,6 +899,70 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       await party.setFollowing(following);
     } catch (_) {
       _showBanner('추종 상태를 서버에 알리지 못했다');
+    }
+  }
+
+  /// 파티 패널을 열고 닫는다. 월드 메뉴가 부른다.
+  void togglePartyPanel() {
+    _partyPanel.toggle();
+    GameAudio.play(Sfx.uiClick);
+  }
+
+  /// 근처 요원을 파티로 부른다.
+  void invitePlayerToParty(int characterId, String name) {
+    GameAudio.play(Sfx.uiClick);
+    _showBanner('$name 님을 초대했다');
+    unawaited(_runPartyAction(() => party.invite(characterId)));
+  }
+
+  /// 받은 초대를 수락한다.
+  void acceptPartyInvite(PartyInviteInfo invite) {
+    GameAudio.play(Sfx.uiClick);
+    unawaited(_runPartyAction(() => party.accept(invite.id)));
+  }
+
+  /// 받은 초대를 거절한다.
+  void declinePartyInvite(PartyInviteInfo invite) {
+    GameAudio.play(Sfx.uiClick);
+    unawaited(_runPartyAction(() => party.decline(invite.id)));
+  }
+
+  /// 파티장 자리를 넘긴다.
+  void promotePartyMember(int characterId, String name) {
+    GameAudio.play(Sfx.uiClick);
+    _showBanner('$name 님에게 파티장을 넘긴다');
+    unawaited(_runPartyAction(() => party.promote(characterId)));
+  }
+
+  /// 파티에서 나간다.
+  void leavePartyFromPanel() {
+    GameAudio.play(Sfx.uiClick);
+    if (isFollowingLeader) _stopFollowing();
+    _showBanner('파티에서 나왔다');
+    unawaited(_runPartyAction(party.leave));
+  }
+
+  /// 파티를 해산한다.
+  void disbandPartyFromPanel() {
+    GameAudio.play(Sfx.uiClick);
+    _showBanner('파티를 해산했다');
+    unawaited(_runPartyAction(party.disband));
+  }
+
+  /// 파티 요청을 보내고, 서버가 거절하면 그 사유를 화면에 띄운다.
+  ///
+  /// 삼키지 않는 이유는 파티의 실패가 **사람에게 설명되어야 하는 실패**이기
+  /// 때문이다. "상대가 이미 다른 파티에 있다" 처럼 서버가 문장으로 주는 사유를
+  /// 지워 버리면, 눌렀는데 아무 일도 일어나지 않는 화면이 된다.
+  Future<void> _runPartyAction(Future<void> Function() action) async {
+    try {
+      await action();
+    } on SpacetimeDbReducerException catch (error) {
+      // 서버가 한국어 문장으로 사유를 준다. 전송 과정에서 앞에 붙는 찌꺼기만
+      // 벗겨서 그대로 보여준다.
+      _showBanner(cleanReducerError(error.message));
+    } on Object {
+      _showBanner('서버에 닿지 못했다');
     }
   }
 
@@ -1082,55 +1166,68 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   }
 
   /// 가까워진 상주 로봇을 깨우고, 멀어진 로봇은 다시 잠재운다.
+  /// 서버가 알려 준 몬스터를 화면의 몸과 맞춘다.
+  ///
+  /// **몬스터의 진실은 전부 서버에 있다.** 여기서 만들어 내거나 없애는 판단을
+  /// 하지 않고, 서버 표에 있는 것을 그대로 비춘다. 로컬에서 따로 굴리면 A 가
+  /// 잡은 몹이 B 화면에 살아 있게 되어 같은 대상을 함께 때리는 일이 성립하지
+  /// 않는다.
+  ///
+  /// 화면 밖 몹까지 컴포넌트로 들고 있지는 않는다. 서버에는 7 천 기가 있고
+  /// 그 전부를 그릴 이유가 없다 — 멀어지면 컴포넌트만 걷어내고, 다시 다가가면
+  /// 서버가 준 최신 상태로 되살린다.
   void _refreshMonsterStreaming() {
-    // 1. 멀어진 개체 회수. 있던 자리를 장부에 적어 두고 사라진다.
-    final releaseSquared = _monsterReleaseRadius * _monsterReleaseRadius;
-    final toRelease = <int>[];
-    _activeMonsters.forEach((id, enemy) {
-      if (!enemy.isAlive) return;
-      if ((enemy.grid - player.grid).length2 > releaseSquared) {
-        toRelease.add(id);
-      }
-    });
-    for (final id in toRelease) {
-      final enemy = _activeMonsters.remove(id);
-      if (enemy == null) continue;
-      final seed = enemy.seed;
-      if (seed != null) {
-        seed.position.setFrom(enemy.grid);
-        seed.active = false;
-      }
-      enemies.remove(enemy);
-      // 회수된 개체는 더 이상 월드에 없다. 자동 사냥이 쥐고 있으면 사라진
-      // 좌표를 향해 계속 걷는다.
-      autoHunt.forget(enemy);
-      enemy.removeFromParent();
-    }
+    final visible = _monsterReleaseRadius * _monsterReleaseRadius;
+    final seen = <int>{};
 
-    // 2. 활성 반경에 들어온 개체를 깨운다.
-    if (_activeMonsters.length >= _maxActiveMonsters) return;
-    final activationSquared =
-        _monsterActivationRadius * _monsterActivationRadius;
+    for (final snapshot in presence.monsters) {
+      // 멀리 있는 것은 아직 그리지 않는다.
+      if ((snapshot.grid - player.grid).length2 > visible) continue;
+      seen.add(snapshot.id);
 
-    for (final seed in population.seedsNear(
-      player.grid,
-      _monsterActivationRadius,
-    )) {
-      if (_activeMonsters.length >= _maxActiveMonsters) break;
-      if (seed.active) continue;
-      if ((seed.position - player.grid).length2 > activationSquared) continue;
-      // 안전지대 안으로는 한 발도 들이지 않는다.
-      if (map.safeZone.contains(seed.position.x, seed.position.y)) continue;
+      final existing = _activeMonsters[snapshot.id];
+      if (existing != null) {
+        existing.applyServerState(
+          grid: snapshot.grid,
+          hpRatio: snapshot.hpRatio,
+          alive: snapshot.alive,
+          tagged: snapshot.taggedByMe,
+        );
+        continue;
+      }
+
+      // 쓰러져 있는 몹은 새로 만들지 않는다. 되살아나면 그때 나타난다.
+      if (!snapshot.alive) continue;
+      if (_activeMonsters.length >= _maxActiveMonsters) continue;
 
       final enemy = Enemy(
-        species: seed.species,
-        grid: map.nearestWalkable(seed.position),
-        hpMultiplier: seed.hpMultiplier,
-      )..seed = seed;
-      seed.active = true;
-      _activeMonsters[seed.id] = enemy;
+        species: MonsterCodex.byLevel(snapshot.level),
+        grid: snapshot.grid.clone(),
+      )..serverId = snapshot.id;
+      enemy.applyServerState(
+        grid: snapshot.grid,
+        hpRatio: snapshot.hpRatio,
+        alive: snapshot.alive,
+        tagged: snapshot.taggedByMe,
+      );
+      _activeMonsters[snapshot.id] = enemy;
       enemies.add(enemy);
       world.add(enemy);
+    }
+
+    // 멀어졌거나 서버에서 사라진 몹의 몸을 걷어낸다.
+    if (_activeMonsters.length == seen.length) return;
+    final stale = <int>[];
+    _activeMonsters.forEach((id, enemy) {
+      if (!seen.contains(id)) stale.add(id);
+    });
+    for (final id in stale) {
+      final enemy = _activeMonsters.remove(id);
+      if (enemy == null) continue;
+      enemies.remove(enemy);
+      // 자동 사냥이 쥐고 있으면 사라진 좌표를 향해 계속 걷는다.
+      autoHunt.forget(enemy);
+      enemy.removeFromParent();
     }
   }
 
@@ -1468,6 +1565,9 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 월드에서 먼저 빠진다. 남겨 두면 조종하는 사람이 없는 몸이 사냥터
     // 한복판에 서 있게 된다.
     presence.leave();
+    // 파티 구독만 닫는다. 탈퇴는 하지 않는다 — 잠깐 자리를 비운 것과 파티를
+    // 떠난 것은 다르다.
+    party.detach();
 
     final sync = this.sync;
     if (sync != null) {
@@ -1489,13 +1589,10 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 쓰러진 대상을 붙들고 있으면 시체 앞에서 다음 사냥감을 찾지 않는다.
     autoHunt.forget(enemy);
 
-    // 월드에 상주하던 개체라면 장부에 파괴를 기록한다. 시간이 지나면
-    // AI가 같은 자리에 새 유닛을 배치하므로 월드가 텅 비지 않는다.
-    final seed = enemy.seed;
-    if (seed != null) {
-      population.markDestroyed(seed);
-      _activeMonsters.remove(seed.id);
-    }
+    // 서버가 모는 개체는 서버 표에서 사라지거나 되살아난다. 여기서는 화면의
+    // 몸만 걷어내고, 리스폰은 서버 정비 틱이 맡는다.
+    final serverId = enemy.serverId;
+    if (serverId != null) _activeMonsters.remove(serverId);
 
     kills++;
     // 점수는 골격 등급과 몬스터 레벨을 함께 반영한다.
@@ -1506,9 +1603,15 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       MonsterBuild.sovereign => 400,
     };
     score += (baseScore * (1 + enemy.level * 0.05)).round();
-    player.gainXp(
-      LevelSystem.killXp(enemy.xpValue, playerLevel: player.level),
-    );
+
+    // **경험치는 서버가 준다.** 서버가 모는 몹은 `award_kill` 이 선점자에게
+    // 크레딧을 주므로, 여기서 또 주면 두 배가 된다. 게다가 크레딧은 막타가
+    // 아니라 **처음 때린 사람**에게 가므로, 로컬에서 주면 가로챈 쪽도 받는다.
+    if (!enemy.isServerDriven) {
+      player.gainXp(
+        LevelSystem.killXp(enemy.xpValue, playerLevel: player.level),
+      );
+    }
     hitStop.trigger(enemy.isBoss ? 0.16 : 0.05);
 
     // 잔해에서 전리품이 튀어나온다. 강한 개체일수록 조금 더 후하다.
@@ -1518,12 +1621,18 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 더 위험한 곳으로 나갈수록 벌이가 나아진다는 뜻이 되어, 사냥터를 골라
     // 다니는 것 자체가 선택이 된다. 20 레벨 언저리에서 상한에 닿던 곡선은
     // 그대로 두었다.
-    _spawnDrops(
-      enemy.grid,
-      DropTables.forEnemy(enemy.build),
-      luck: math.min(0.15, enemy.level * 0.0075),
-      amountMultiplier: 1 + math.min(0.5, enemy.level * 0.025),
-    );
+    //
+    // 전리품도 서버가 모는 몹에서는 내지 않는다. 지금은 서버에 드롭 판정이
+    // 없어 잠시 비는 자리이고, 로컬에서 내면 같은 몹을 잡은 사람마다 각자
+    // 다른 전리품을 줍게 되어 "하나의 월드" 가 다시 깨진다.
+    if (!enemy.isServerDriven) {
+      _spawnDrops(
+        enemy.grid,
+        DropTables.forEnemy(enemy.build),
+        luck: math.min(0.15, enemy.level * 0.0075),
+        amountMultiplier: 1 + math.min(0.5, enemy.level * 0.025),
+      );
+    }
 
     sync?.reportKill(enemy.species.codeName, score);
   }
@@ -1647,12 +1756,15 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     status = GameStatus.playing;
     resumeEngine();
     GameAudio.play(Sfx.uiClick);
-    GameAudio.playMusic();
+
+    // 배경음악은 자동으로 켜지 않는다. 트랙이 필요한 연출이 스스로
+    // [GameAudio.playMusic] 을 부른다.
 
     // 월드에 들어간다. **내 몸이 실제로 선 자리**를 함께 넘겨야 남의 화면에
     // 곧바로 제자리에 나타난다. 실패해도 게임은 그대로 굴러가고, 다른 요원만
     // 보이지 않는다.
     presence.enter(player.grid);
+    unawaited(party.attach());
   }
 
   /// 게임을 일시정지한다.
@@ -1697,7 +1809,6 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _activeMonsters.clear();
 
     map = LevelMap.generate();
-    population = MonsterPopulation.generate(map);
     kills = 0;
     score = 0;
     survivalTime = 0;

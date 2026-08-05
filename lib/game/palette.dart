@@ -127,6 +127,12 @@ class GamePalette {
   /// 마력 게이지. 스킬 자원이라 스태미나(EN)와 뚜렷이 구분되는 청록을 쓴다.
   static const Color mpFill = Color(0xFF00D8E8);
   static const Color xpFill = Color(0xFF8A5CFF);
+  /// 같은 월드의 다른 요원. 내 몸의 청록과 확실히 갈리는 호박색이다.
+  ///
+  /// 적(마젠타)·아군 자신(청록)·안전지대(민트) 어디와도 겹치지 않아야
+  /// 미니맵에서 한눈에 구별된다.
+  static const Color remotePlayer = Color(0xFFFFA53D);
+
   static const Color textPrimary = Color(0xFF0C2A3D);
   static const Color textDim = Color(0xFF5C86A0);
 }

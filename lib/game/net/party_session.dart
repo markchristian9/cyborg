@@ -114,6 +114,15 @@ abstract class PartySession {
   /// 서버에 연결되어 있는지.
   bool get isAvailable => false;
 
+  /// 파티 소식을 받기 시작한다. 월드에 들어갈 때 부른다.
+  Future<void> attach() async {}
+
+  /// 파티 소식 받기를 멈춘다. 월드에서 나갈 때 부른다.
+  ///
+  /// **탈퇴가 아니다.** 사냥터에서 나와 캐릭터 화면에 가 있는 동안 파티가 풀리면,
+  /// 잠깐 자리를 비운 것과 파티를 떠난 것이 구별되지 않는다.
+  void detach() {}
+
   /// 월드에 있는 다른 사람을 초대한다. 파티가 없으면 서버가 만들어 준다.
   Future<void> invite(int targetCharacterId) async {}
 
@@ -125,6 +134,15 @@ abstract class PartySession {
 
   /// 파티에서 나간다.
   Future<void> leave() async {}
+
+  /// 파티를 해산한다. 파티장만 할 수 있다.
+  Future<void> disband() async {}
+
+  /// 파티원을 내보낸다. 파티장만 할 수 있다.
+  Future<void> kick(int targetCharacterId) async {}
+
+  /// 파티장 자리를 넘긴다. 파티장만 할 수 있다.
+  Future<void> promote(int targetCharacterId) async {}
 
   /// 파티장을 따라다니겠다고 알리거나 그만둔다.
   Future<void> setFollowing(bool following) async {}

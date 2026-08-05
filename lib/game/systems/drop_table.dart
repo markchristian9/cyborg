@@ -157,16 +157,6 @@ abstract final class DropTables {
     maxDrops: 2,
   );
 
-  /// 웨이브를 정리했을 때 주는 보상.
-  static const waveClear = DropTable(
-    [
-      DropEntry(PickupKind.nanoVial, chance: 1, amountScale: 1.4),
-      DropEntry(PickupKind.energyCell, chance: 1, amountScale: 1.4),
-      DropEntry(PickupKind.dataChip, chance: 0.5),
-    ],
-    maxDrops: 3,
-  );
-
   /// [kind]에 해당하는 적의 드롭 표.
   static DropTable forEnemy(MonsterBuild build) => switch (build) {
         MonsterBuild.drone => scout,

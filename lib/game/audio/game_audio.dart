@@ -141,7 +141,8 @@ class _SfxSpec {
 /// 볼륨을 감쇠시켜 화면 밖의 전투가 시끄럽지 않도록 한다.
 ///
 /// 배경음악은 [playMusic] 으로 켜고 끈다. 효과음과 달리 한 번에 한 트랙만
-/// 흐르며, 트랙을 바꾸면 이전 트랙은 자동으로 멈춘다.
+/// 흐르며, 트랙을 바꾸면 이전 트랙은 자동으로 멈춘다. 게임이 스스로 트랙을
+/// 트는 일은 없다 — 부르지 않으면 배경음악은 흐르지 않는다.
 ///
 /// [init] 을 부르지 않았거나 플랫폼이 오디오를 지원하지 않으면 모든 재생
 /// 요청은 조용히 무시된다. 소리 때문에 게임이 멈추는 일은 없다.
@@ -150,9 +151,6 @@ class GameAudio {
 
   static const String _sfxDir = 'sfx/';
   static const String _musicDir = 'music/';
-
-  /// 게임을 시작할 때 흐르는 기본 배경음악.
-  static const MusicTrack defaultTrack = MusicTrack.battle;
 
   /// 이 거리(타일)를 넘어선 곳의 소리는 들리지 않는다.
   static const double hearingRange = 20;
@@ -446,9 +444,11 @@ class GameAudio {
 
   /// 배경음악을 무한 반복으로 재생한다.
   ///
-  /// 트랙을 넘기지 않으면 [defaultTrack] 이 흐른다. 이미 같은 트랙이 흐르고
-  /// 있으면 아무 일도 하지 않으므로 매 상태 전환마다 안심하고 불러도 된다.
-  static Future<void> playMusic([MusicTrack track = defaultTrack]) async {
+  /// 기본 트랙이라는 것은 없다. 어떤 곡을 틀지는 부르는 쪽이 반드시 정해야
+  /// 하며, 아무도 부르지 않으면 게임은 배경음악 없이 굴러간다. 이미 같은
+  /// 트랙이 흐르고 있으면 아무 일도 하지 않으므로 매 상태 전환마다 안심하고
+  /// 불러도 된다.
+  static Future<void> playMusic(MusicTrack track) async {
     if (!_ready || _currentTrack == track) return;
     _currentTrack = track;
     if (_muted) return;

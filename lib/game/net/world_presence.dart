@@ -41,11 +41,14 @@ class RemotePlayer {
   double get hpRatio => maxHp <= 0 ? 0 : (hp / maxHp).clamp(0.0, 1.0);
 }
 
-/// 서버가 확정한 **내** 전투 상태.
+/// 서버가 확정한 **내 몸**의 상태.
 ///
 /// 체력·마력·사망은 이제 서버가 정한다. 클라이언트는 이 값을 그리고, 다음 갱신이
 /// 올 때까지의 사이만 예측으로 메운다 — 예측은 화면을 부드럽게 하려는 것이지
 /// 판정이 아니다. 그래서 여기 값과 어긋나면 **언제나 여기가 맞다.**
+///
+/// 이걸 받아 오지 않으면 화면의 체력은 가득 찬 채인데 서버에서는 이미 쓰러져
+/// 안전지대로 옮겨진, 두 세계가 어긋난 상태가 된다.
 class MyWorldState {
   const MyWorldState({
     required this.grid,
@@ -134,6 +137,7 @@ abstract class WorldPresence {
 
   /// 서버가 관리하는 몬스터. 서버에 붙지 않았으면 빈 목록이다.
   List<ServerMonster> get monsters => const [];
+
 
   /// 몬스터를 때린다. 사거리·쿨다운·선점·보상은 **전부 서버가 판정한다.**
   ///

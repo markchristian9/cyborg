@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import '../palette.dart';
 
 /// 액션 버튼에 표시할 아이콘 종류.
-enum ActionIcon { blade, plasma, dash }
+enum ActionIcon { blade, plasma, dash, zoomIn, zoomOut }
 
 /// 터치 조작용 원형 액션 버튼.
 ///
@@ -216,6 +216,30 @@ class ActionButton extends PositionComponent
             ..lineTo(center.dx + dx + 5, center.dy)
             ..lineTo(center.dx + dx - 4, center.dy + 9);
           canvas.drawPath(path, paint..strokeWidth = 3);
+        }
+
+      case ActionIcon.zoomIn:
+      case ActionIcon.zoomOut:
+        // 돋보기. 손잡이는 오른쪽 아래로 뻗고, 안쪽 부호가 방향을 알린다.
+        final lens = center + const Offset(-2, -2);
+        canvas.drawCircle(lens, 7, paint..strokeWidth = 2.4);
+        canvas.drawLine(
+          lens + const Offset(5, 5),
+          lens + const Offset(10, 10),
+          paint..strokeWidth = 2.8,
+        );
+        // 가로줄은 둘 다, 세로줄은 확대에만 — 그래서 +와 −가 된다.
+        canvas.drawLine(
+          lens + const Offset(-3.5, 0),
+          lens + const Offset(3.5, 0),
+          paint..strokeWidth = 2.2,
+        );
+        if (icon == ActionIcon.zoomIn) {
+          canvas.drawLine(
+            lens + const Offset(0, -3.5),
+            lens + const Offset(0, 3.5),
+            paint..strokeWidth = 2.2,
+          );
         }
     }
   }

@@ -37,6 +37,26 @@ enum TeleportDestination {
   /// 안전지대인지 여부. 목록에서 다른 색으로 강조한다.
   bool get isSafe => this == TeleportDestination.safeZone;
 
+  /// [grid] 가 지금 속해 있는 구역.
+  ///
+  /// 텔레포트 목적지와 같은 이름을 쓴다. "북부 구역으로 이동" 해서 도착한 곳이
+  /// "북부 구역" 이라고 표시되어야 두 화면이 같은 세계를 가리킨다.
+  ///
+  /// 경계는 월드 중앙에서 본 대각선이다. 방위는 [anchorOn] 과 마찬가지로
+  /// **그리드 축** 기준이라 미니맵에서 위로 보이는 쪽이 북쪽이다.
+  static TeleportDestination at(Vector2 grid, LevelMap map) {
+    if (map.safeZone.containsPoint(grid)) return TeleportDestination.safeZone;
+
+    final offset = grid - map.worldCenter;
+    // 두 축 중 더 멀리 벗어난 쪽이 구역을 정한다. 그 갈림이 곧 대각선이다.
+    if (offset.x.abs() > offset.y.abs()) {
+      return offset.x > 0 ? TeleportDestination.east : TeleportDestination.west;
+    }
+    return offset.y > 0
+        ? TeleportDestination.south
+        : TeleportDestination.north;
+  }
+
   /// 월드 가장자리에서 안쪽으로 얼마나 들어온 곳을 "끝"으로 볼지(타일).
   ///
   /// 맵 외곽 세 칸은 [TileType.none]이라 아예 통행할 수 없고([LevelMap] 생성

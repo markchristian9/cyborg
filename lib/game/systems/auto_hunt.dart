@@ -87,10 +87,17 @@ class AutoHuntController<T extends Object> {
   /// 없으면 그 자리에서 벽에 붙어 사냥이 멈춘다.
   static const double pursuitTimeout = 4.0;
 
-  /// 포기한 타깃을 다시 노리지 않는 시간(초).
+  /// 처음 포기한 타깃을 다시 노리지 않는 시간(초).
   ///
   /// 곧바로 풀면 같은 몬스터를 다시 골라 벽에 붙는 것을 반복한다.
-  static const double blockDuration = 3.0;
+  /// [pursuitTimeout] 보다 길어야 한다 — 짧으면 닿지 않는 몬스터 둘이
+  /// 번갈아 풀리면서 더 먼 정상 몬스터에게 순서가 영영 오지 않는다.
+  static const double blockDurationBase = 8.0;
+
+  /// 반복 실패로 늘어난 차단 시간의 상한(초).
+  ///
+  /// 상한이 없으면 잠깐 막혔던 몬스터가 사실상 영구 제외된다.
+  static const double blockDurationMax = 60.0;
 
   /// 자동 사냥이 켜져 있는지.
   bool get enabled => _enabled;
@@ -122,6 +129,24 @@ class AutoHuntController<T extends Object> {
   /// 포기한 타깃과 남은 차단 시간.
   final Map<T, double> _blocked = {};
 
+  /// 타깃별로 연달아 닿지 못한 횟수.
+  ///
+  /// 차단이 풀린 뒤에도 남겨 두어야 차단 시간이 실패마다 배로 늘어난다.
+  /// 매번 같은 시간만 차단하면, 닿지 않는 몬스터가 여럿일 때 그들의 차단
+  /// 구간이 서로 어긋나 항상 누군가 하나는 후보로 살아 있고, 그보다 먼
+  /// 정상 몬스터는 한 번도 선택되지 못한다.
+  final Map<T, int> _failures = {};
+
+  /// [failures] 번째 실패에 적용할 차단 시간(초).
+  static double blockDurationFor(int failures) {
+    var duration = blockDurationBase;
+    for (var i = 1; i < failures; i++) {
+      duration *= 2;
+      if (duration >= blockDurationMax) return blockDurationMax;
+    }
+    return duration;
+  }
+
   /// [origin] 을 중심으로 자동 사냥을 켠다.
   void enable(Vector2 origin) {
     _enabled = true;
@@ -129,6 +154,7 @@ class AutoHuntController<T extends Object> {
     _target = null;
     _pursuitTime = 0;
     _blocked.clear();
+    _failures.clear();
   }
 
   /// 자동 사냥을 끄고 상태를 비운다.
@@ -138,6 +164,7 @@ class AutoHuntController<T extends Object> {
     _target = null;
     _pursuitTime = 0;
     _blocked.clear();
+    _failures.clear();
   }
 
   /// 켜져 있으면 끄고, 꺼져 있으면 [origin] 에서 켠다. 켠 뒤의 상태를 돌려준다.
@@ -215,6 +242,9 @@ class AutoHuntController<T extends Object> {
       // 닿았으니 추격 시계를 되돌린다. 때리는 동안 밀고 밀리며 사거리를
       // 들락거려도 포기 판정에 걸리지 않게 한다.
       _pursuitTime = 0;
+      // 닿은 이상 지금까지의 실패는 무의미하다. 남겨 두면 한 번 막혔던
+      // 몬스터가 이후에 정상적으로 잡히는데도 차단 시간만 계속 길어진다.
+      _failures.remove(target);
       return AutoHuntDecision<T>(AutoHuntAction.attack, target: target);
     }
 
@@ -222,7 +252,12 @@ class AutoHuntController<T extends Object> {
     // 보고 놓아준 뒤 잠시 제외한다.
     _pursuitTime += dt;
     if (_pursuitTime >= pursuitTimeout) {
-      _blocked[target] = blockDuration;
+      // 실패가 쌓일수록 더 오래 제외한다. 그래야 닿지 않는 몬스터들이
+      // 결국 동시에 차단되는 순간이 오고, 그 틈에 더 먼 정상 몬스터가
+      // 선택된다.
+      final failures = (_failures[target] ?? 0) + 1;
+      _failures[target] = failures;
+      _blocked[target] = blockDurationFor(failures);
       _target = null;
       _pursuitTime = 0;
       return AutoHuntDecision<T>(AutoHuntAction.idle);
@@ -291,6 +326,9 @@ class AutoHuntController<T extends Object> {
   /// 쫓던 대상이 사라졌는데도 다음 프레임까지 그 자리를 향해 걷는다.
   void forget(T candidate) {
     _blocked.remove(candidate);
+    // 실패 기록도 함께 지운다. 남겨 두면 월드에서 사라진 개체의 항목이
+    // 계속 쌓이고, 같은 자리에 다시 배치된 개체가 옛 이력을 물려받는다.
+    _failures.remove(candidate);
     if (identical(_target, candidate)) {
       _target = null;
       _pursuitTime = 0;

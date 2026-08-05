@@ -5,7 +5,7 @@ import 'package:actionrpg/game/systems/monster_codex.dart';
 import 'package:actionrpg/game/iso.dart';
 import 'package:actionrpg/game/level/level_map.dart';
 import 'package:actionrpg/game/level/safe_zone.dart';
-import 'package:actionrpg/game/systems/wave_director.dart';
+import 'package:actionrpg/game/systems/monster_population.dart';
 import 'package:flame/components.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -136,18 +136,26 @@ void main() {
     });
   });
 
-  group('WaveDirector 스폰', () {
-    test('플레이어가 안전지대 한가운데 있어도 밖에만 스폰한다', () {
+  group('몬스터 배치', () {
+    test('안전지대 안에는 한 마리도 놓이지 않는다', () {
+      // 웨이브가 사라지면서 스폰 책임이 `MonsterPopulation` 으로 옮겨졌다.
+      // 안전지대는 쉬는 곳이라는 약속은 그대로여야 한다 — 여기가 뚫리면
+      // 접속하자마자 얻어맞고, 회복할 자리가 월드에서 사라진다.
       final map = LevelMap.generate();
-      final director = WaveDirector(map: map, random: math.Random(7));
-      for (var i = 0; i < 60; i++) {
-        final point = director.pickSpawnPoint(map.safeZone.center);
+      final population = MonsterPopulation.generate(map);
+
+      // 안전지대와 그 둘레만 보면 된다. 먼 사냥터의 몹은 이 약속과 무관하다.
+      final nearby = population.seedsNear(
+        map.safeZone.center,
+        kSafeZoneSizeMeters,
+      );
+
+      for (final seed in nearby) {
         expect(
-          map.safeZone.containsPoint(point),
+          map.safeZone.containsPoint(seed.home),
           isFalse,
-          reason: '$point이 안전지대 안이다',
+          reason: '${seed.home}이 안전지대 안이다',
         );
-        expect(map.isWalkableAt(point.x, point.y), isTrue);
       }
     });
   });

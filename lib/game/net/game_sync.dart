@@ -14,12 +14,6 @@ abstract class GameSync {
   /// 새 런이 시작되었을 때.
   void reportRunStarted() {}
 
-  /// 웨이브가 시작되었을 때.
-  void reportWaveStarted(int wave) {}
-
-  /// 웨이브를 정리했을 때.
-  void reportWaveCleared(int wave, int score) {}
-
   /// 적을 처치했을 때.
   void reportKill(String enemyKind, int score) {}
 
@@ -46,7 +40,6 @@ abstract class GameSync {
 
   /// 런이 끝났을 때(로비 복귀·재시작 등).
   void reportRunFinished({
-    required int wave,
     required int kills,
     required int score,
     required double survivalTime,

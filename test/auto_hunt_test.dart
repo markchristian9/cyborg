@@ -341,8 +341,72 @@ void main() {
       }
       expect(hunt.target, isNull);
 
-      // 차단이 풀릴 만큼 시간을 흘린다.
-      for (var i = 0; i < 3; i++) {
+      // 첫 차단은 blockDurationBase(8초)다. 그만큼 흘리면 다시 후보가 된다.
+      for (var i = 0; i < AutoHuntController.blockDurationBase.toInt(); i++) {
+        _step(hunt, player: Vector2.zero(), mobs: [mob], dt: 1);
+      }
+      expect(hunt.target, same(mob));
+    });
+
+    test('차단 시간은 실패가 쌓일수록 배로 늘고 상한에서 멈춘다', () {
+      const base = AutoHuntController.blockDurationBase;
+      expect(AutoHuntController.blockDurationFor(1), base);
+      expect(AutoHuntController.blockDurationFor(2), base * 2);
+      expect(AutoHuntController.blockDurationFor(3), base * 4);
+      // 상한을 넘기려 해도 거기서 멈춘다 — 잠깐 막혔던 몬스터가 사실상
+      // 영구 제외되면 안 된다.
+      expect(
+        AutoHuntController.blockDurationFor(99),
+        AutoHuntController.blockDurationMax,
+      );
+    });
+
+    test('닿지 않는 몬스터가 둘이어도 더 먼 정상 몬스터에게 순서가 온다', () {
+      // 회귀 방지: 차단 시간이 추격 시간보다 짧으면 A 와 B 의 차단 구간이
+      // 서로 어긋나 항상 하나는 후보로 살아 있고, 그보다 먼 C 는 한 번도
+      // 선택되지 못한다(영구 기아). 차단이 실패마다 길어져야 둘이 동시에
+      // 막히는 순간이 생기고 그 틈에 C 가 선택된다.
+      final hunt = _controller(radiusMeters: 10)..enable(Vector2.zero());
+      final unreachableNear = _Mob(2, 0);
+      final unreachableMid = _Mob(3, 0);
+      final farther = _Mob(6, 0);
+      final mobs = [unreachableNear, unreachableMid, farther];
+
+      var reached = false;
+      for (var i = 0; i < 60; i++) {
+        _step(hunt, player: Vector2.zero(), mobs: mobs, dt: 1);
+        if (identical(hunt.target, farther)) {
+          reached = true;
+          break;
+        }
+      }
+      expect(reached, isTrue, reason: '더 먼 정상 몬스터가 한 번도 선택되지 않았다');
+    });
+
+    test('닿고 나면 그동안의 실패가 초기화되어 차단이 다시 짧아진다', () {
+      final hunt = _controller(radiusMeters: 10)..enable(Vector2.zero());
+      final mob = _Mob(5, 0);
+      const base = AutoHuntController.blockDurationBase;
+
+      // 1차 실패 → base 만큼 차단.
+      for (var i = 0; i < 4; i++) {
+        _step(hunt, player: Vector2.zero(), mobs: [mob], dt: 1);
+      }
+      for (var i = 0; i < base.toInt(); i++) {
+        _step(hunt, player: Vector2.zero(), mobs: [mob], dt: 1);
+      }
+      expect(hunt.target, same(mob));
+
+      // 사거리 안으로 붙어 한 번 때린다. 이때 실패 기록이 지워져야 한다.
+      final decision = _step(hunt, player: Vector2(4.5, 0), mobs: [mob], dt: 0.1);
+      expect(decision.action, AutoHuntAction.attack);
+
+      // 다시 놓쳐 실패해도 2차(base*2)가 아니라 1차(base) 차단이어야 한다.
+      for (var i = 0; i < 4; i++) {
+        _step(hunt, player: Vector2.zero(), mobs: [mob], dt: 1);
+      }
+      expect(hunt.target, isNull);
+      for (var i = 0; i < base.toInt(); i++) {
         _step(hunt, player: Vector2.zero(), mobs: [mob], dt: 1);
       }
       expect(hunt.target, same(mob));

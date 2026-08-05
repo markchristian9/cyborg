@@ -10,6 +10,8 @@ import 'game/net/spacetime_game_sync.dart';
 import 'game/palette.dart';
 import 'spacetime/generated/player_character.dart';
 import 'spacetime/spacetime_leaderboard.dart';
+import 'spacetime/spacetime_party.dart';
+import 'spacetime/spacetime_world_presence.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -87,6 +89,10 @@ class _GameScreenState extends State<GameScreen> {
           ? null
           : SpacetimeGameSync(client, startTotalXp: startTotalXp),
       leaderboard: client == null ? null : SpacetimeLeaderboard(client),
+      // 같은 월드의 다른 요원. 연결이 없으면 혼자 플레이하는 모습이 된다.
+      presence: client == null ? null : SpacetimeWorldPresence(client),
+      // 파티. 연결이 없으면 파티가 없는 것과 화면에서 같은 모습이다.
+      party: client == null ? null : SpacetimePartySession(client),
       startTotalXp: startTotalXp,
       design: kind.design,
       // 앱이 스스로 로그인하고 캐릭터까지 골라 들어왔다면 시작 메뉴에서

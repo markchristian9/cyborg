@@ -56,8 +56,9 @@ class _AudioCheckAppState extends State<_AudioCheckApp> {
           '${GameAudio.currentTrack == track ? "재생 중" : "실패"}');
       await Future<void>.delayed(const Duration(seconds: 4));
     }
-    await GameAudio.playMusic(GameAudio.defaultTrack);
-    _write('기본 트랙(${GameAudio.defaultTrack.name})으로 복귀');
+    // 효과음을 가리지 않도록 배경음악은 여기서 끈다.
+    await GameAudio.stopMusic();
+    _write('배경음악 정지');
 
     for (final sfx in Sfx.values) {
       GameAudio.play(sfx);
