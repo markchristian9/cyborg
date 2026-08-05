@@ -88,9 +88,53 @@ pub struct Party {
     ///
     /// 리더가 누구인지는 **여기 한 곳에만** 둔다. 멤버 행에도 `is_leader` 를 두면
     /// 위임할 때 두 곳을 함께 고쳐야 하고, 한쪽만 고쳐진 상태가 존재할 수 있다.
+    ///
+    /// **[`hunt_lead_character_id`](Party::hunt_lead_character_id) 와 다른
+    /// 축이다.** 파티장은 파티를 만든 사람이고, 사냥을 이끄는 사람은 그때그때
+    /// 먼저 나선 사람이다. 둘이 같을 수도 다를 수도 있다.
     pub leader_character_id: u64,
 
     pub created_at: Timestamp,
+
+    /// 지금 사냥을 이끄는 사람. 아무도 이끌지 않으면 `None`.
+    ///
+    /// ## 왜 파티장과 나누는가
+    ///
+    /// 파티장은 **누가 파티에 있는지**를 정하고, 이 사람은 **어디로 갈지**를
+    /// 정한다. 다른 일이므로 같은 사람이어야 할 이유가 없다 — 길을 아는 사람이
+    /// 앞장서고 파티장은 뒤따라도 된다. 형제 게임 라리엔이 같은 결론에 도달했다
+    /// (`docs/party.md` §10.5.1 — "파티장의 권한 기능이 아니라 임시 사냥 지휘").
+    ///
+    /// ## 왜 별도 표가 아닌가
+    ///
+    /// 파티 하나에 행이 하나이므로 **"파티당 이끌기는 하나"가 구조로 강제된다.**
+    /// 따로 표를 두면 그 제약을 손으로 검사해야 하고, 두 곳이 어긋난 상태가
+    /// 생길 수 있다.
+    ///
+    /// 그리고 파티원 전원이 이미 [`my_party`] 를 구독하므로, 이 값이 채워지는
+    /// 순간이 곧 전원에게 알리는 순간이다. 라리엔이 초대를 따로 방송한 것은
+    /// UDP 라 행 구독이 없었기 때문이지 그 방식이 더 나아서가 아니다.
+    ///
+    /// **맨 끝에 있고 기본값이 있어야 한다** — 이미 배포된 표라 자동 마이그레이션이
+    /// 두 조건을 요구한다([`PartyMember::following_character_id`] 와 같은 이유).
+    #[default(None::<u64>)]
+    pub hunt_lead_character_id: Option<u64>,
+
+    /// 이끌기가 시작될 때마다 오르는 번호.
+    ///
+    /// 참여할 때 이 값을 함께 보내 **어느 이끌기에 참여하는지** 못 박는다. 없으면
+    /// 이런 일이 생긴다 — A 가 이끌기를 시작하고, B 가 참여를 누르려는 사이에 A 가
+    /// 그만두고 C 가 새로 시작하면, B 의 늦은 참여가 C 를 따라가게 된다. 누른
+    /// 것과 다른 결과다.
+    ///
+    /// `auto_inc` 를 쓰지 않는 이유는 그것이 연속을 보장하지 않기 때문이다. 여기
+    /// 필요한 것은 순서가 아니라 **직전 것과 다르다는 사실**이라 직접 센다.
+    #[default(0u64)]
+    pub hunt_lead_seq: u64,
+
+    // 이끄는 사람의 **이름은 여기 두지 않는다.** 자동 마이그레이션의 기본값은
+    // 상수 자리에서 만들어지는데 `String` 은 거기서 만들 수 없다. 대신 따라가는
+    // 쪽이 그 사람을 직접 구독하므로(관심 영역 밖이어도) 이름이 함께 온다.
 }
 
 /// 파티에 속한 캐릭터 한 명.
@@ -214,6 +258,8 @@ pub fn create_party(ctx: &ReducerContext) -> Result<(), String> {
         id: 0,
         leader_character_id: character_id,
         created_at: ctx.timestamp,
+        hunt_lead_character_id: None,
+        hunt_lead_seq: 0,
     });
 
     ctx.db.party_member().insert(PartyMember {
@@ -289,6 +335,8 @@ pub fn invite_to_party(ctx: &ReducerContext, target_character_id: u64) -> Result
                 id: 0,
                 leader_character_id: character_id,
                 created_at: ctx.timestamp,
+                hunt_lead_character_id: None,
+                hunt_lead_seq: 0,
             });
             ctx.db.party_member().insert(PartyMember {
                 character_id,
@@ -570,13 +618,6 @@ pub fn set_following(ctx: &ReducerContext, following: bool) -> Result<(), String
         .find(character_id)
         .ok_or_else(|| "속한 파티가 없다.".to_string())?;
 
-    let party = ctx
-        .db
-        .party()
-        .id()
-        .find(member.party_id)
-        .ok_or_else(|| "파티를 찾을 수 없다.".to_string())?;
-
     if !following {
         ctx.db.party_member().character_id().update(PartyMember {
             following_character_id: None,
@@ -585,13 +626,125 @@ pub fn set_following(ctx: &ReducerContext, following: bool) -> Result<(), String
         return Ok(());
     }
 
-    // 파티장은 자기를 따라갈 수 없다. 따라갈 사람이 없으면 파티장이 이끄는 것이다.
-    if party.leader_character_id == character_id {
-        return Err("파티장은 추종할 수 없다.".to_string());
+    // 따라가겠다는 뜻만으로는 누구를 따라갈지 정할 수 없다. 이끄는 사람이 바뀌는
+    // 사이에 늦게 도착한 요청이 엉뚱한 사람에게 붙지 않도록, 참여는 어느 이끌기인지
+    // 함께 밝히는 [`accept_hunt_lead`] 로만 받는다.
+    Err("참여할 이끌기를 지정해야 한다.".to_string())
+}
+
+/// 사냥을 이끌기 시작한다. **파티원이면 누구나** 할 수 있다.
+///
+/// 파티장의 권한이 아니다 — 파티장은 누가 파티에 있는지를 정하고, 이끄는 사람은
+/// 어디로 갈지를 정한다. 길을 아는 사람이 앞장서면 된다.
+///
+/// 파티당 하나만 돌아간다. 이미 누가 이끌고 있으면 거절하는데, 가로채기를 허용하면
+/// 따라가던 사람들이 영문도 모른 채 다른 방향으로 끌려간다.
+#[spacetimedb::reducer]
+pub fn start_hunt_lead(ctx: &ReducerContext) -> Result<(), String> {
+    let character_id = require_character(ctx)?;
+    let member = ctx
+        .db
+        .party_member()
+        .character_id()
+        .find(character_id)
+        .ok_or_else(|| "속한 파티가 없다.".to_string())?;
+
+    let party = ctx
+        .db
+        .party()
+        .id()
+        .find(member.party_id)
+        .ok_or_else(|| "파티를 찾을 수 없다.".to_string())?;
+
+    if let Some(current) = party.hunt_lead_character_id {
+        if current == character_id {
+            return Err("이미 이끌고 있다.".to_string());
+        }
+        return Err("다른 요원이 이끌고 있다.".to_string());
+    }
+
+    // 이끄는 사람이 남을 따라갈 수는 없다. 앞장서면서 뒤따르는 상태는 없다.
+    if member.following_character_id.is_some() {
+        ctx.db.party_member().character_id().update(PartyMember {
+            following_character_id: None,
+            ..member
+        });
+    }
+
+    ctx.db.party().id().update(Party {
+        hunt_lead_character_id: Some(character_id),
+        hunt_lead_seq: party.hunt_lead_seq.saturating_add(1),
+        ..party
+    });
+
+    Ok(())
+}
+
+/// 이끌기를 그만둔다. **이끄는 본인만** 할 수 있다.
+///
+/// 따라가던 사람들의 추종도 함께 푼다. 이끄는 사람이 사라졌는데 따라가는 상태만
+/// 남으면, 화면은 없는 사람을 향해 계속 걸으려 한다.
+#[spacetimedb::reducer]
+pub fn stop_hunt_lead(ctx: &ReducerContext) -> Result<(), String> {
+    let character_id = require_character(ctx)?;
+    let member = ctx
+        .db
+        .party_member()
+        .character_id()
+        .find(character_id)
+        .ok_or_else(|| "속한 파티가 없다.".to_string())?;
+
+    let party = ctx
+        .db
+        .party()
+        .id()
+        .find(member.party_id)
+        .ok_or_else(|| "파티를 찾을 수 없다.".to_string())?;
+
+    if party.hunt_lead_character_id != Some(character_id) {
+        return Err("이끄는 중이 아니다.".to_string());
+    }
+
+    end_hunt_lead(ctx, party);
+    Ok(())
+}
+
+/// 진행 중인 이끌기에 참여한다.
+///
+/// [`lead_seq`](Party::hunt_lead_seq) 를 함께 받아 **어느 이끌기인지** 대조한다.
+/// 화면에 떠 있던 버튼이 오래된 것일 수 있고, 그 사이 이끄는 사람이 바뀌었다면
+/// 참여를 거절해야 누른 것과 다른 결과가 나오지 않는다.
+#[spacetimedb::reducer]
+pub fn accept_hunt_lead(ctx: &ReducerContext, lead_seq: u64) -> Result<(), String> {
+    let character_id = require_character(ctx)?;
+    let member = ctx
+        .db
+        .party_member()
+        .character_id()
+        .find(character_id)
+        .ok_or_else(|| "속한 파티가 없다.".to_string())?;
+
+    let party = ctx
+        .db
+        .party()
+        .id()
+        .find(member.party_id)
+        .ok_or_else(|| "파티를 찾을 수 없다.".to_string())?;
+
+    let Some(leader) = party.hunt_lead_character_id else {
+        return Err("이끄는 요원이 없다.".to_string());
+    };
+
+    if party.hunt_lead_seq != lead_seq {
+        return Err("이미 끝난 이끌기다.".to_string());
+    }
+
+    if leader == character_id {
+        return Err("자기 자신을 따라갈 수는 없다.".to_string());
     }
 
     ctx.db.party_member().character_id().update(PartyMember {
-        following_character_id: Some(party.leader_character_id),
+        following_character_id: Some(leader),
         ..member
     });
 
@@ -702,6 +855,38 @@ fn clear_invites_for(ctx: &ReducerContext, character_id: u64) {
     }
 }
 
+/// 이끌기를 끝내고 따라가던 사람들을 놓아 준다.
+///
+/// 그만두기·탈퇴·추방·해산이 모두 같은 뒤처리를 해야 하므로 한 곳에 모은다.
+/// 따로 쓰면 한 경로에서만 따라가던 상태를 남겨, 없는 사람을 향해 계속 걷는
+/// 파티원이 생긴다.
+fn end_hunt_lead(ctx: &ReducerContext, party: Party) {
+    let leader = party.hunt_lead_character_id;
+    let party_id = party.id;
+
+    ctx.db.party().id().update(Party {
+        hunt_lead_character_id: None,
+        // 번호는 되돌리지 않는다. 다음 이끌기가 같은 번호를 다시 쓰면, 방금 끝난
+        // 이끌기를 향한 늦은 참여가 새 것에 붙는다.
+        ..party
+    });
+
+    let Some(leader) = leader else { return };
+    let followers: Vec<PartyMember> = ctx
+        .db
+        .party_member()
+        .by_party()
+        .filter(party_id)
+        .filter(|m| m.following_character_id == Some(leader))
+        .collect();
+    for member in followers {
+        ctx.db.party_member().character_id().update(PartyMember {
+            following_character_id: None,
+            ..member
+        });
+    }
+}
+
 /// 파티장이 빠졌을 때 자리를 이어받을 사람을 고른다.
 ///
 /// 가장 오래 있은 사람이며, 같은 시각에 들어온 둘이 있으면 캐릭터 번호가 작은
@@ -752,6 +937,18 @@ fn remove_member(ctx: &ReducerContext, party_id: u64, character_id: u64) {
 
     let Some(party) = ctx.db.party().id().find(party_id) else {
         return;
+    };
+
+    // 나간 사람이 이끌고 있었으면 이끌기부터 끝낸다. 따라가던 사람들을 놓아 주는
+    // 일까지 여기서 함께 일어난다.
+    let party = if party.hunt_lead_character_id == Some(character_id) {
+        end_hunt_lead(ctx, party);
+        match ctx.db.party().id().find(party_id) {
+            Some(refreshed) => refreshed,
+            None => return,
+        }
+    } else {
+        party
     };
 
     // 나간 사람이 파티장이었으면 가장 오래 있은 사람이 이어받는다.
@@ -829,6 +1026,25 @@ mod tests {
     #[test]
     fn 남은_사람이_없으면_이어받을_사람도_없다() {
         assert_eq!(pick_next_leader(Vec::new()), None);
+    }
+
+    #[test]
+    fn 이끌기_번호는_시작할_때마다_달라진다() {
+        // 같은 번호가 다시 쓰이면, 방금 끝난 이끌기를 향한 늦은 참여가 새 것에
+        // 붙는다. 끝낼 때 되돌리지 않고 시작할 때 올리는 이유다.
+        let mut seq: u64 = 0;
+        let first = seq.saturating_add(1);
+        seq = first;
+        // 끝나도 번호는 그대로 남는다.
+        let second = seq.saturating_add(1);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn 이끌기_번호는_상한에서_멈춘다() {
+        // `saturating_add` 라 넘치지 않는다. 상한에 닿으면 더는 오르지 않지만,
+        // 그 지경이 되려면 한 파티에서 1800경 번을 시작해야 한다.
+        assert_eq!(u64::MAX.saturating_add(1), u64::MAX);
     }
 
     #[test]

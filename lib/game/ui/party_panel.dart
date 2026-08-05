@@ -19,6 +19,7 @@ class _Row {
     required this.isLeader,
     required this.isFollowing,
     required this.isSelf,
+    this.isHuntLead = false,
     this.hpRatio,
   });
 
@@ -28,6 +29,9 @@ class _Row {
   final bool isLeader;
   final bool isFollowing;
   final bool isSelf;
+
+  /// 이 사람이 지금 사냥을 이끌고 있는가. 파티장 여부와는 별개다.
+  final bool isHuntLead;
 
   /// 체력 비율. 월드에서 보이지 않는 파티원은 알 수 없어 null 이다.
   final double? hpRatio;
@@ -155,6 +159,7 @@ class PartyPanel extends PositionComponent
         isLeader: member.isLeader,
         isFollowing: member.isFollowing,
         isSelf: isSelf,
+        isHuntLead: member.characterId == party.huntLeadCharacterId,
         hpRatio: isSelf
             ? (game.player.maxHp <= 0
                 ? null
@@ -338,8 +343,11 @@ class PartyPanel extends PositionComponent
       anchor: Anchor.topRight,
     );
 
-    // 추종 중이면 한 줄 아래에 작게 표시한다.
-    if (row.isFollowing) {
+    // 지금 무엇을 하고 있는지 한 줄 아래에 작게 표시한다. 파티장 표식(★)과
+    // 따로 두는 이유는 축이 다르기 때문이다 — 파티장이 남을 따라갈 수도 있다.
+    if (row.isHuntLead) {
+      _muted.render(canvas, '이끄는 중', Vector2(x, y + 21));
+    } else if (row.isFollowing) {
       _muted.render(canvas, '추종 중', Vector2(x, y + 21));
     }
 
@@ -399,9 +407,17 @@ class PartyPanel extends PositionComponent
   /// 아래쪽 두 버튼의 이름.
   ///
   /// 파티장에게는 추종 버튼이 의미가 없다(자기를 따라갈 수 없다). 대신 해산을 준다.
+  /// 아래쪽 두 버튼의 이름.
+  ///
+  /// 왼쪽은 **사냥을 이끄는 일**, 오른쪽은 **파티를 떠나는 일**이다. 둘은 다른
+  /// 축이라 — 파티장이면서 남을 따라갈 수도, 파티장이 아니면서 이끌 수도 있다 —
+  /// 한 버튼에 섞지 않는다.
   List<String> _footerLabels(PartySession party) {
-    if (party.isLeader) return const ['해산', '나가기'];
-    return [game.isFollowingLeader ? '추종 중단' : '파티장 추종', '나가기'];
+    final right = party.isLeader ? '해산' : '나가기';
+    if (game.isFollowingLeader) return ['추종 중단', right];
+    if (party.isHuntLeading) return ['이끌기 중지', right];
+    if (party.hasHuntLead) return ['추종', right];
+    return ['파티 이끌기', right];
   }
 
   // ── 입력 ────────────────────────────────────────────────────────────
@@ -481,17 +497,24 @@ class PartyPanel extends PositionComponent
   }
 
   void _onButtonSelected(int index) {
+    final party = _party;
+
     if (index == 1) {
-      game.leavePartyFromPanel();
+      if (party.isLeader) {
+        game.disbandPartyFromPanel();
+      } else {
+        game.leavePartyFromPanel();
+      }
       close();
       return;
     }
-    if (_party.isLeader) {
-      game.disbandPartyFromPanel();
-      close();
+
+    // 따라가는 중이거나 따라갈 사람이 있으면 그쪽을, 아니면 내가 이끈다.
+    if (game.isFollowingLeader || party.hasHuntLead) {
+      game.togglePartyFollow();
       return;
     }
-    game.togglePartyFollow();
+    game.togglePartyHuntLead();
   }
 }
 

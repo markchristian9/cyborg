@@ -92,11 +92,34 @@ abstract class PartySession {
   /// 내 캐릭터 식별자. 파티에 들어가기 전에는 null 일 수 있다.
   int? get selfCharacterId => null;
 
-  /// 내가 파티장인가.
+  /// 내가 파티장인가 — **파티를 만든 사람**인가.
+  ///
+  /// 사냥을 이끄는 것과는 다른 축이다([isHuntLeading]). 파티장은 누가 파티에
+  /// 있는지를 정하고, 이끄는 사람은 어디로 갈지를 정한다.
   bool get isLeader {
     final self = selfCharacterId;
     return self != null && self == leaderCharacterId;
   }
+
+  /// 지금 사냥을 이끄는 사람. 아무도 이끌지 않으면 null.
+  int? get huntLeadCharacterId => null;
+
+  /// 지금 이끌기의 번호. 참여할 때 그대로 돌려보내 어느 이끌기인지 못 박는다.
+  int get huntLeadSeq => 0;
+
+  /// 누군가 이끌고 있는가.
+  bool get hasHuntLead => huntLeadCharacterId != null;
+
+  /// 내가 이끌고 있는가.
+  bool get isHuntLeading {
+    final self = selfCharacterId;
+    return self != null && self == huntLeadCharacterId;
+  }
+
+  /// 이끌기가 열려 있는데 내가 아직 참여하지 않았는가.
+  ///
+  /// 이 값이 참일 때 화면에 "추종" 버튼을 보여 준다.
+  bool get canJoinHuntLead => hasHuntLead && !isHuntLeading && !isFollowing;
 
   /// 내가 따라다니기로 한 상태인가.
   bool get isFollowing {
@@ -144,8 +167,23 @@ abstract class PartySession {
   /// 파티장 자리를 넘긴다. 파티장만 할 수 있다.
   Future<void> promote(int targetCharacterId) async {}
 
-  /// 파티장을 따라다니겠다고 알리거나 그만둔다.
+  /// 따라가기를 그만둔다.
+  ///
+  /// 시작하는 쪽은 [acceptHuntLead] 다 — 어느 이끌기에 참여하는지 밝혀야 하므로
+  /// 참·거짓만으로는 정할 수 없다.
   Future<void> setFollowing(bool following) async {}
+
+  /// 사냥을 이끌기 시작한다. 파티원이면 누구나 할 수 있다.
+  Future<void> startHuntLead() async {}
+
+  /// 이끌기를 그만둔다. 이끄는 본인만 할 수 있다.
+  Future<void> stopHuntLead() async {}
+
+  /// 진행 중인 이끌기에 참여한다.
+  ///
+  /// [leadSeq] 를 함께 보내는 이유는 화면에 떠 있던 버튼이 오래된 것일 수 있기
+  /// 때문이다. 그 사이 이끄는 사람이 바뀌었다면 서버가 거절한다.
+  Future<void> acceptHuntLead(int leadSeq) async {}
 }
 
 /// 서버가 없을 때 쓰는 빈 구현.

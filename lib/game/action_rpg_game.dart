@@ -48,6 +48,7 @@ import 'ui/party_panel.dart';
 import 'ui/hud.dart';
 import 'ui/inventory_ui.dart';
 import 'ui/leaderboard_screen.dart';
+import 'ui/mute_button.dart';
 import 'ui/teleport_sheet.dart';
 import 'ui/touch_controls.dart';
 import 'ui/world_menu.dart';
@@ -127,6 +128,9 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   late LeaderboardScreen _leaderboardScreen;
   late TeleportSheet _teleportSheet;
   late WorldMenu _worldMenu;
+
+  /// 소리를 끄고 켜는 버튼. 월드 메뉴 버튼 옆에 선다.
+  late MuteButton _muteButton;
 
   /// 파티를 보고 다루는 패널. 월드 메뉴에서 연다.
   late PartyPanel _partyPanel;
@@ -487,10 +491,12 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
           ),
       ],
     );
+    _muteButton = MuteButton();
     camera.viewport.addAll([
       PotionQuickBar(),
       BuffBar(),
       _worldMenu,
+      _muteButton,
       _partyPanel,
       _partyInviteCard,
       _contextActionBar,
@@ -529,8 +535,19 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _autoHuntRadiusUp.position = Vector2(size.x - 92, autoHuntY - 52);
     _autoHuntRadiusDown.position = Vector2(size.x - 92, autoHuntY + 52);
 
-    // 월드 메뉴는 우상단 미니맵 바로 아래에 붙인다.
-    _worldMenu.position = Vector2(size.x - 18, 168);
+    // 월드 메뉴와 음소거 버튼은 우상단 미니맵 아래에 나란히 세운다.
+    //
+    // 미니맵 아래 좌표 표시는 우측 정렬이라 미니맵 폭을 훨씬 넘어 왼쪽으로
+    // 300픽셀 넘게 뻗는다(`Hud._renderMinimap`). 그 글줄 아래(y 173)를 확실히
+    // 비켜야 버튼이 좌표를 덮어 가리지 않는다.
+    const menuRowY = 180.0;
+    _worldMenu.position = Vector2(size.x - 18, menuRowY);
+    // 음소거는 메뉴 버튼 왼쪽에 붙인다. 메뉴는 아래로 펼쳐지므로 같은 줄에
+    // 두어야 패널이 열려도 가려지지 않는다.
+    _muteButton.position = Vector2(
+      size.x - 18 - WorldMenu.buttonSize - 10,
+      menuRowY,
+    );
     // 퀵슬롯과 버프 표시는 화면 크기에 맞춰 스스로 자리를 잡는다.
 
     // 파티 패널은 좌상단 생존 정보 패널 아래에 둔다. 전투 시야를 가리지 않는
@@ -947,9 +964,21 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     }
   }
 
-  /// 파티장이 지금 월드 어디에 있는지. 보이지 않으면 null.
+  /// 내가 따라가기로 한 사람. 아무도 따라가지 않으면 null.
+  int? get _followingCharacterId {
+    final self = party.selfCharacterId;
+    if (self == null) return null;
+    for (final member in party.members) {
+      if (member.characterId == self) return member.followingCharacterId;
+    }
+    return null;
+  }
+
+  /// 따라가는 사람이 지금 월드 어디에 있는지. 보이지 않으면 null.
   FollowTarget? _followTarget() {
-    final leaderId = party.leaderCharacterId;
+    // **파티장이 아니라 "내가 따라가기로 한 사람"** 을 본다. 이끄는 사람은 파티를
+    // 만든 사람과 다를 수 있고, 그때 파티장을 따라가면 누른 것과 다른 결과가 된다.
+    final leaderId = _followingCharacterId;
     if (leaderId == null) return null;
 
     for (final other in presence.others) {
@@ -1090,29 +1119,61 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     }
   }
 
-  /// 파티장을 따라다니기 시작하거나 그만둔다. HUD 버튼이 부른다.
+  /// 사냥을 이끌기 시작하거나 그만둔다. 파티원이면 누구나 할 수 있다.
+  ///
+  /// 파티장(파티를 만든 사람)과는 다른 축이다 — 길을 아는 사람이 앞장서면 된다.
+  void togglePartyHuntLead() {
+    if (status != GameStatus.playing) return;
+    if (!party.inParty) {
+      _showBanner('파티가 없다');
+      return;
+    }
+
+    GameAudio.play(Sfx.uiClick);
+    if (party.isHuntLeading) {
+      _showBanner('이끌기를 그만뒀다');
+      unawaited(_runPartyAction(party.stopHuntLead));
+      return;
+    }
+
+    if (party.hasHuntLead) {
+      _showBanner('다른 요원이 이끌고 있다');
+      return;
+    }
+
+    _showBanner('사냥을 이끈다 — 파티원이 따라올 수 있다');
+    unawaited(_runPartyAction(party.startHuntLead));
+  }
+
+  /// 진행 중인 이끌기에 참여한다. 따라가는 중이면 그만둔다.
   void togglePartyFollow() {
     if (status != GameStatus.playing) return;
     if (!party.inParty) {
       _showBanner('파티가 없다');
       return;
     }
-    if (party.isLeader) {
-      _showBanner('파티장은 추종할 수 없다');
-      return;
-    }
-
     if (isFollowingLeader) {
       GameAudio.play(Sfx.uiClick);
       _stopFollowing('추종 해제');
       return;
     }
 
+    if (!party.hasHuntLead) {
+      _showBanner('이끄는 요원이 없다');
+      return;
+    }
+    if (party.isHuntLeading) {
+      _showBanner('이끄는 중에는 따라갈 수 없다');
+      return;
+    }
+
     GameAudio.play(Sfx.uiClick);
     _followStopping = false;
     partyFollow.reset();
-    _showBanner('파티장 추종 시작 — 경험치는 각자 몫이다');
-    unawaited(_runPartyAction(() => party.setFollowing(true)));
+    _showBanner('추종을 시작한다 — 경험치는 각자 몫이다');
+    // 어느 이끌기인지 함께 보낸다. 그 사이 이끄는 사람이 바뀌었으면 서버가
+    // 거절하고, 누른 것과 다른 사람을 따라가는 일이 생기지 않는다.
+    unawaited(_runPartyAction(() => party.acceptHuntLead(party.huntLeadSeq)));
   }
 
   /// 자동 사냥을 켜고 끈다. 켤 때는 지금 서 있는 자리가 중심이 된다.
@@ -1136,6 +1197,18 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       player.clearMoveTarget();
       _showBanner('자동 사냥 해제');
     }
+  }
+
+  /// 지금 소리가 꺼져 있는지. 음소거 버튼이 매 프레임 이 값을 보고 그린다.
+  bool get isAudioMuted => GameAudio.muted;
+
+  /// 효과음과 배경음을 통째로 끄고 켠다. 고른 상태는 다음 실행까지 남는다.
+  void toggleMute() {
+    final muted = GameAudio.toggleMuted();
+    // 켜는 쪽으로 뒤집었을 때만 소리로 답한다. 끄는 순간의 클릭음은 이미
+    // 음소거에 걸려 울리지 않는다 — 침묵 자체가 그 답이다.
+    if (!muted) GameAudio.play(Sfx.uiClick);
+    _showBanner(muted ? '소리 꺼짐' : '소리 켜짐');
   }
 
   /// 자동 사냥 반경을 [deltaMeters] 만큼 조절한다. 1~10 m 를 벗어나지 않는다.

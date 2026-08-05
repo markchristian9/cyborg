@@ -10,12 +10,16 @@ class _FakeParty extends PartySession {
   _FakeParty({
     this.selfId,
     this.leaderId,
+    this.huntLeadId,
+    this.seq = 0,
     this.memberList = const [],
     this.inviteList = const [],
   });
 
   final int? selfId;
   final int? leaderId;
+  final int? huntLeadId;
+  final int seq;
 
   // 이름이 `members`·`invites` 가 아닌 것은 그쪽을 getter 로 덮어써야 하기
   // 때문이다. 필드와 getter 가 같은 이름일 수는 없다.
@@ -36,6 +40,12 @@ class _FakeParty extends PartySession {
 
   @override
   List<PartyInviteInfo> get invites => inviteList;
+
+  @override
+  int? get huntLeadCharacterId => huntLeadId;
+
+  @override
+  int get huntLeadSeq => seq;
 
   @override
   Listenable get changes => Listenable.merge(const []);
@@ -93,6 +103,62 @@ void main() {
         memberList: [_member(9, leader: true)],
       );
       expect(party.isFollowing, isFalse);
+    });
+  });
+
+  group('파티 — 파티장과 이끄는 사람은 다른 축이다', () {
+    test('파티장이 아니어도 이끌 수 있다', () {
+      final party = _FakeParty(selfId: 5, leaderId: 9, huntLeadId: 5);
+      expect(party.isLeader, isFalse, reason: '파티를 만든 사람은 9 다');
+      expect(party.isHuntLeading, isTrue, reason: '앞장서는 사람은 5 다');
+    });
+
+    test('파티장이면서 남을 따라갈 수 있다', () {
+      final party = _FakeParty(
+        selfId: 9,
+        leaderId: 9,
+        huntLeadId: 5,
+        memberList: [_member(9, leader: true, following: 5), _member(5)],
+      );
+      expect(party.isLeader, isTrue);
+      expect(party.isHuntLeading, isFalse);
+      expect(party.isFollowing, isTrue);
+    });
+
+    test('아무도 이끌지 않으면 참여할 것도 없다', () {
+      final party = _FakeParty(selfId: 5, leaderId: 9);
+      expect(party.hasHuntLead, isFalse);
+      expect(party.canJoinHuntLead, isFalse);
+    });
+
+    test('남이 이끌고 내가 안 따라가면 참여할 수 있다', () {
+      final party = _FakeParty(
+        selfId: 5,
+        leaderId: 9,
+        huntLeadId: 9,
+        memberList: [_member(9, leader: true), _member(5)],
+      );
+      expect(party.canJoinHuntLead, isTrue);
+    });
+
+    test('이미 따라가는 중이면 참여 버튼은 필요 없다', () {
+      final party = _FakeParty(
+        selfId: 5,
+        leaderId: 9,
+        huntLeadId: 9,
+        memberList: [_member(9, leader: true), _member(5, following: 9)],
+      );
+      expect(party.canJoinHuntLead, isFalse);
+    });
+
+    test('내가 이끄는 중이면 내 이끌기에 참여하지 않는다', () {
+      final party = _FakeParty(
+        selfId: 5,
+        leaderId: 9,
+        huntLeadId: 5,
+        memberList: [_member(9, leader: true), _member(5)],
+      );
+      expect(party.canJoinHuntLead, isFalse);
     });
   });
 
