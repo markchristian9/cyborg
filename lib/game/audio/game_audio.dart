@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flame/components.dart';
 import 'package:flame_audio/flame_audio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 게임에서 재생하는 효과음의 종류.
 ///
@@ -151,6 +152,9 @@ class GameAudio {
 
   static const String _sfxDir = 'sfx/';
   static const String _musicDir = 'music/';
+
+  /// 음소거 여부를 저장해 두는 곳. 게임을 다시 켜도 끈 소리는 꺼진 채다.
+  static const String _mutedPrefsKey = 'audio.muted';
 
   /// 이 거리(타일)를 넘어선 곳의 소리는 들리지 않는다.
   static const double hearingRange = 20;
@@ -349,15 +353,89 @@ class GameAudio {
 
   static bool _muted = false;
 
+  /// [_currentTrack] 의 파일이 실제로 플레이어에 올라가 재생을 시작했는지.
+  ///
+  /// 음소거 중에 [playMusic] 을 부르면 어떤 곡을 틀지만 정해 두고 재생은
+  /// 미룬다. 그때 이 값이 false 로 남아, 음소거를 풀 때 이어 틀 것이
+  /// 아니라 처음부터 틀어야 한다는 사실을 알린다 — 한 번도 튼 적 없는
+  /// 트랙을 resume 하면 아무 소리도 나지 않는다.
+  static bool _bgmStarted = false;
+
+  /// [pauseAll] 로 잠시 멈춰 둔 상태인지.
+  ///
+  /// 음소거와는 별개의 사정이라 따로 센다. 앱이 백그라운드에 있는 동안
+  /// 음소거를 풀었다고 해서 소리가 다시 흘러서는 안 된다.
+  static bool _suspended = false;
+
+  /// 저장된 음소거 설정을 이미 읽었는지.
+  static bool _prefsLoaded = false;
+
   /// 음소거 여부. 켜면 재생 중인 배경음도 함께 멈춘다.
   static bool get muted => _muted;
 
   static set muted(bool value) {
     if (_muted == value) return;
     _muted = value;
-    // 재생 중인 트랙이 없을 때 bgm 을 건드리면 플랫폼에 따라 예외가 난다.
-    if (_currentTrack == null) return;
-    unawaited(_guard(value ? FlameAudio.bgm.pause() : FlameAudio.bgm.resume()));
+    unawaited(_saveMuted(value));
+    unawaited(_syncMusic());
+  }
+
+  /// 음소거를 뒤집고 바뀐 상태를 돌려준다.
+  static bool toggleMuted() => muted = !_muted;
+
+  /// 지난 실행에서 저장해 둔 음소거 설정을 불러온다.
+  ///
+  /// 설정을 읽지 못해도 소리가 나는 쪽(기본값)으로 진행한다.
+  static Future<void> _loadMuted() async {
+    if (_prefsLoaded) return;
+    _prefsLoaded = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _muted = prefs.getBool(_mutedPrefsKey) ?? false;
+    } catch (error) {
+      debugPrint('GameAudio: 음소거 설정을 읽지 못했습니다 — $error');
+    }
+  }
+
+  static Future<void> _saveMuted(bool value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_mutedPrefsKey, value);
+    } catch (error) {
+      debugPrint('GameAudio: 음소거 설정을 저장하지 못했습니다 — $error');
+    }
+  }
+
+  /// 지금의 음소거·일시정지 상태에 맞게 배경음악을 맞춘다.
+  ///
+  /// 트랙을 바꾸든 음소거를 토글하든 앱이 백그라운드로 가든, 배경음악을
+  /// 실제로 울릴지 말지는 전부 여기 한 곳에서 결정한다. 재생 중인 트랙이
+  /// 없을 때 bgm 을 건드리면 플랫폼에 따라 예외가 나므로 그 경계도 여기서
+  /// 지킨다.
+  static Future<void> _syncMusic() async {
+    final track = _currentTrack;
+    if (track == null) return;
+
+    if (_muted || _suspended) {
+      if (_bgmStarted) await _guard(FlameAudio.bgm.pause());
+      return;
+    }
+    await (_bgmStarted ? _guard(FlameAudio.bgm.resume()) : _startTrack(track));
+  }
+
+  /// 트랙 파일을 처음부터 재생한다.
+  static Future<void> _startTrack(MusicTrack track) async {
+    try {
+      await FlameAudio.bgm.play(
+        '$_musicDir${_tracks[track]!.file}',
+        volume: _trackVolume(track),
+      );
+      _bgmStarted = true;
+    } catch (error) {
+      _currentTrack = null;
+      _bgmStarted = false;
+      debugPrint('배경음악 재생 실패($track): $error');
+    }
   }
 
   /// 오디오 실패가 게임 로직으로 번지지 않도록 삼킨다.
@@ -373,6 +451,9 @@ class GameAudio {
   /// 무음 상태로 남는다.
   static Future<void> init() async {
     if (_ready) return;
+    // 소리를 올리기 전에 끄고 켠 기억부터 되살린다. 에셋 로딩이 실패해도
+    // 이 설정만은 남아야 음소거 버튼이 지난번 상태를 그대로 보여 준다.
+    await _loadMuted();
     try {
       // 같은 파일을 여러 사운드가 공유할 수 있으므로 가장 큰 요구치로 맞춘다.
       final needed = <String, int>{};
@@ -451,22 +532,18 @@ class GameAudio {
   static Future<void> playMusic(MusicTrack track) async {
     if (!_ready || _currentTrack == track) return;
     _currentTrack = track;
-    if (_muted) return;
-    try {
-      await FlameAudio.bgm.play(
-        '$_musicDir${_tracks[track]!.file}',
-        volume: _trackVolume(track),
-      );
-    } catch (error) {
-      _currentTrack = null;
-      debugPrint('배경음악 재생 실패($track): $error');
-    }
+    // 곡이 바뀌었으니 이어 틀 것이 아니라 새 파일을 처음부터 틀어야 한다.
+    _bgmStarted = false;
+    await _syncMusic();
   }
 
   /// 배경음악을 멈춘다.
   static Future<void> stopMusic() async {
     if (_currentTrack == null) return;
     _currentTrack = null;
+    // 음소거 중이라 아직 틀지도 않은 트랙이면 멈출 것도 없다.
+    if (!_bgmStarted) return;
+    _bgmStarted = false;
     await _guard(FlameAudio.bgm.stop());
   }
 
@@ -474,7 +551,7 @@ class GameAudio {
   static Future<void> setMusicVolume(double value) async {
     musicVolume = value.clamp(0.0, 1.0);
     final track = _currentTrack;
-    if (track != null && !_muted) {
+    if (track != null && _bgmStarted) {
       await _guard(
         FlameAudio.bgm.audioPlayer.setVolume(_trackVolume(track)),
       );
@@ -483,14 +560,14 @@ class GameAudio {
 
   /// 앱이 백그라운드로 갈 때처럼 전체 오디오를 잠시 멈춘다.
   static Future<void> pauseAll() async {
-    if (_currentTrack != null) await _guard(FlameAudio.bgm.pause());
+    _suspended = true;
+    await _syncMusic();
   }
 
   /// [pauseAll] 로 멈춘 오디오를 다시 재생한다.
   static Future<void> resumeAll() async {
-    if (_currentTrack != null && !_muted) {
-      await _guard(FlameAudio.bgm.resume());
-    }
+    _suspended = false;
+    await _syncMusic();
   }
 
   static double _trackVolume(MusicTrack track) =>
