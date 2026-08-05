@@ -29,6 +29,10 @@ const List<String> kCyborgViewSubscriptions = [
   'SELECT * FROM my_account',
   'SELECT * FROM my_session',
   'SELECT * FROM my_characters',
+  // 월드에 선 내 몸. **청크 구독과 별개로** 항상 받아야 한다 — 재구독의 기준이
+  // 되는 좌표를 그 구독 안에서 읽으면, 서버가 나를 옮기는 순간(입장 보정·사망
+  // 재가동·텔레포트) 내 행이 옛 구독 밖으로 나가 새 자리를 알 길이 없어진다.
+  'SELECT * FROM my_world_player',
 ];
 
 /// 플레이어 구독용 청크 한 변(타일). 서버 `PLAYER_SUB_CHUNK_TILES` 와 같아야 한다.
@@ -108,7 +112,7 @@ List<String> worldSubscriptionsFor(double tileX, double tileY) {
 
 /// 파티에 관한 구독. 월드에 들어가 있는 동안 함께 건다.
 ///
-/// [kWorldSubscriptions] 와 한 배열로 합치지 않는다. 파티 표는 공개 표가 아니라
+/// [worldSubscriptionsFor] 가 만드는 목록과 한 배열로 합치지 않는다. 파티 표는 공개 표가 아니라
 /// **자기 파티만 보여 주는 view** 라 성격이 다르고, 무엇보다 두 목록을 한 곳에
 /// 두면 월드와 파티를 각각 손보는 사람이 같은 줄에서 부딪친다.
 ///

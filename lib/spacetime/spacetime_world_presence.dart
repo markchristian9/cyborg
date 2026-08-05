@@ -34,6 +34,12 @@ class SpacetimeWorldPresence extends WorldPresence {
   /// 가만히 서 있는 사람이 초당 5번씩 같은 좌표를 보낼 이유가 없다.
   static const double _minStep = 0.15;
 
+  /// 방향이 이만큼 돌아가면 다시 보낸다(두 방향 내적의 문턱값).
+  ///
+  /// 0.985 는 약 10 도다. 더 작게 잡으면 조이스틱이 미세하게 떨릴 때마다
+  /// 전송이 일어나고, 더 크게 잡으면 몸을 돌린 것이 남의 화면에 늦게 닿는다.
+  static const double _facingCosThreshold = 0.985;
+
   /// 새 청크 안쪽으로 이만큼 들어온 뒤에야 구독을 옮긴다(타일).
   ///
   /// 경계선 위를 왕복하면 재구독이 진동한다. 보행 3.6 타일/초에서 최소 2.2 초,
@@ -57,6 +63,9 @@ class SpacetimeWorldPresence extends WorldPresence {
 
   DateTime? _lastSentAt;
   Vector2? _lastSentGrid;
+
+  /// 마지막으로 보낸 방향(정규화됨).
+  Vector2? _lastSentFacing;
   bool _inFlight = false;
 
   /// 월드에 들어가 있는지. 들어가기 전에는 좌표를 보내도 서버가 거절한다.
@@ -144,13 +153,19 @@ class SpacetimeWorldPresence extends WorldPresence {
   }
 
   @override
-  void report(Vector2 grid) {
+  void report(Vector2 grid, Vector2 facing) {
     if (!_entered) return;
 
     // 좌표 보고와 **별개로** 확인한다. 아래 `_inFlight`·주기 검사에 걸려 보고를
     // 건너뛰는 동안에도 청크는 넘어갈 수 있고, 그때 재구독을 놓치면 주변이
     // 통째로 비어 보인다.
-    unawaited(_maybeResubscribe(grid));
+    //
+    // 기준은 **서버가 아는 내 자리**다. 화면의 예측 좌표를 쓰면, 서버가 나를
+    // 옮겼을 때(입장 좌표 보정·사망 재가동·텔레포트) 구독만 옛 자리에 남는다.
+    // 그러면 자기 자신조차 구독 범위 밖이 되어 주변이 영영 비어 보인다.
+    unawaited(_maybeResubscribe(_myRow == null
+        ? grid
+        : Vector2(_myRow!.gridX, _myRow!.gridY)));
 
     if (_inFlight) return;
 
@@ -158,12 +173,24 @@ class SpacetimeWorldPresence extends WorldPresence {
     final last = _lastSentAt;
     if (last != null && now.difference(last) < _interval) return;
 
+    // 자리도 방향도 그대로면 보낼 것이 없다. 둘 중 하나만 바뀌어도 보낸다 —
+    // **제자리에서 몸만 도는 것도 남에게 보여야 하는 움직임이다.**
     final previous = _lastSentGrid;
-    if (previous != null && previous.distanceTo(grid) < _minStep) return;
+    final movedEnough =
+        previous == null || previous.distanceTo(grid) >= _minStep;
+    final turnedEnough = _lastSentFacing == null ||
+        _lastSentFacing!.dot(facing.length2 > 0.0001
+                ? facing.normalized()
+                : _lastSentFacing!) <
+            _facingCosThreshold;
+    if (!movedEnough && !turnedEnough) return;
 
     _lastSentAt = now;
     _lastSentGrid = grid.clone();
-    _send(grid);
+    if (facing.length2 > 0.0001) {
+      _lastSentFacing = facing.normalized();
+    }
+    _send(grid, _lastSentFacing ?? Vector2(0, 1));
   }
 
   /// 청크를 넘었으면 구독을 옮긴다.
@@ -228,10 +255,15 @@ class SpacetimeWorldPresence extends WorldPresence {
     }
   }
 
-  Future<void> _send(Vector2 grid) async {
+  Future<void> _send(Vector2 grid, Vector2 facing) async {
     _inFlight = true;
     try {
-      await _client.reducers.moveTo(gridX: grid.x, gridY: grid.y);
+      await _client.reducers.moveTo(
+        gridX: grid.x,
+        gridY: grid.y,
+        facingX: facing.x,
+        facingY: facing.y,
+      );
     } on SpacetimeDbException {
       // 한 번 놓쳐도 다음 주기가 따라잡는다. 좌표는 절대값이라 밀린 것을
       // 다시 보낼 필요가 없다.
@@ -253,6 +285,7 @@ class SpacetimeWorldPresence extends WorldPresence {
           maxHp: row.maxHp,
           alive: row.alive,
           taggedByMe: mine != null && row.taggedBy?.toInt() == mine,
+          facing: Vector2(row.faceX, row.faceY),
         ),
     ];
   }
@@ -319,7 +352,15 @@ class SpacetimeWorldPresence extends WorldPresence {
   }
 
   /// 내 행을 찾는다. 아직 입장 결과가 오지 않았으면 `null`.
+  /// 서버가 아는 내 행.
+  ///
+  /// **청크 구독이 아니라 `my_world_player` view 에서 읽는다.** 그쪽은 내가
+  /// 어디에 있든 언제나 한 줄을 주므로, 서버가 나를 옮겨도 새 자리를 알 수 있다.
+  /// 청크 구독에서 읽으면 옮겨진 순간 내 행이 사라져 옛 자리에 갇힌다.
   WorldPlayer? get _myRow {
+    final mine = _client.myWorldPlayer;
+    if (mine != null) return mine;
+    // view 가 아직 안 왔을 때를 위한 대비책. 월드 구독에도 내 행은 들어 있다.
     final me = _client.identity;
     for (final row in _rows.value) {
       if (row.identity == me) return row;
@@ -360,6 +401,7 @@ class SpacetimeWorldPresence extends WorldPresence {
             lastAttackAtMicros: row.lastAttackAt.toInt(),
             attackDir: Vector2(row.attackDirX, row.attackDirY),
             attackSkill: row.attackSkill,
+            facing: Vector2(row.facingX, row.facingY),
           ),
     ];
   }

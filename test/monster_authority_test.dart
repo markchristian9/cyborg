@@ -28,7 +28,7 @@ void main() {
   /// 월드 중심. 안전지대 한가운데다.
   const center = 503.0;
 
-  Future<SpacetimeDbClient> joinWorld(String name) async {
+  Future<SpacetimeDbClient> joinWorld(String name, {double? x, double? y}) async {
     final client = await SpacetimeDbClient.create(
       host: kCyborgHost,
       database: kCyborgDatabase,
@@ -44,10 +44,12 @@ void main() {
     await client.reducers.createCharacter(name: name, kind: 'male_cyborg');
     await pumpUntil(() => client.myCharacters.count() == 1);
 
-    // 구독은 자기 주변 청크만 건다. 이 테스트는 전원이 월드 중앙에 모이므로
-    // 같은 청크를 구독하게 되고, 서로의 행과 같은 몹을 본다.
-    await client.subscriptions.subscribe(worldSubscriptionsFor(center, center));
-    await client.reducers.enterWorld(gridX: center, gridY: center);
+    // 구독은 자기 주변 청크만 건다 — **어디에 서느냐가 무엇을 보느냐**를 정한다.
+    // 특정 몹을 함께 봐야 하는 테스트는 그 몹 근처를 넘겨 받는다.
+    final sx = x ?? center;
+    final sy = y ?? center;
+    await client.subscriptions.subscribe(worldSubscriptionsFor(sx, sy));
+    await client.reducers.enterWorld(gridX: sx, gridY: sy);
 
     // 내 행이 실제로 도착할 때까지 기다린다. 이걸 빠뜨리면 뒤따르는 코드가
     // "나는 월드에 없다" 고 판단해 조용히 아무것도 하지 않는다.
@@ -79,6 +81,7 @@ void main() {
   }
 
   test('두 접속이 같은 몬스터를 본다', () async {
+    // 같은 자리에 선 둘은 같은 청크를 구독하므로 같은 몹을 받아야 한다.
     final alice = await joinWorld('몹관찰A');
     final bob = await joinWorld('몹관찰B');
     addTearDown(() async {
@@ -140,6 +143,8 @@ void main() {
       await client.reducers.moveTo(
         gridX: me.gridX + dx / dist * step,
         gridY: me.gridY + dy / dist * step,
+        facingX: dx / dist,
+        facingY: dy / dist,
       );
       await Future<void>.delayed(const Duration(milliseconds: 220));
     }
@@ -168,18 +173,19 @@ void main() {
 
   test('한쪽이 때린 결과를 다른 쪽도 본다', timeout: const Timeout(Duration(minutes: 2)), () async {
     final attacker = await joinWorld('때리는쪽');
-    final watcher = await joinWorld('보는쪽');
-    addTearDown(() async {
-      await attacker.disconnect();
-      await watcher.disconnect();
-    });
-
+    addTearDown(() async => attacker.disconnect());
     await pumpUntil(() => attacker.monster.count() > 0);
-    await pumpUntil(() => watcher.monster.count() > 0);
 
     final target = nearestLiveMonster(attacker);
     expect(target, isNotNull);
     final id = target!.id;
+
+    // 보는 쪽은 그 몹 **근처**에 입장한다. 관심 영역 구독이라 멀리 있으면
+    // 애초에 그 몹의 행을 받지 않는다.
+    final watcher =
+        await joinWorld('보는쪽', x: target.gridX, y: target.gridY);
+    addTearDown(() async => watcher.disconnect());
+    await pumpUntil(() => watcher.monster.iter().any((m) => m.id == id));
 
     // 사거리(2.2타일) 안으로 붙는다. 여기서도 서버 좌표를 기준으로 걷는다.
     for (var i = 0; i < 70; i++) {
@@ -199,6 +205,8 @@ void main() {
       await attacker.reducers.moveTo(
         gridX: me.gridX + dx / dist * step,
         gridY: me.gridY + dy / dist * step,
+        facingX: dx / dist,
+        facingY: dy / dist,
       );
       await Future<void>.delayed(const Duration(milliseconds: 220));
     }

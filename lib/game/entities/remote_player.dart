@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flame/components.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../iso.dart';
@@ -24,7 +25,8 @@ class RemotePlayerEntity extends IsoEntity {
         name = snapshot.name,
         level = snapshot.level,
         design = _designFor(snapshot.kind),
-        _target = snapshot.grid.clone(),
+        _segFrom = snapshot.grid.clone(),
+        _segTo = snapshot.grid.clone(),
         alive = snapshot.alive,
         super(grid: snapshot.grid.clone(), bodyRadius: 0.28, depthBias: 0.02);
 
@@ -38,13 +40,50 @@ class RemotePlayerEntity extends IsoEntity {
   /// 이 몸이 쓰는 신체 프레임. 내 캐릭터와 같은 렌더러로 그린다.
   final CyborgDesign design;
 
-  /// 서버가 마지막으로 알려 준 위치. 여기를 향해 미끄러진다.
-  Vector2 _target;
+  /// 이번 보간 구간의 시작점 — 갱신이 올 때의 **화면 위치**다.
+  ///
+  /// 서버가 준 이전 좌표가 아니라 지금 그려지는 자리에서 출발해야 한다. 아니면
+  /// 갱신마다 몸이 뒤로 튕겼다 다시 나아간다.
+  final Vector2 _segFrom;
+
+  /// 이번 구간의 도착점. 서버가 마지막으로 알려 준 좌표다.
+  Vector2 _segTo;
+
+  double _segElapsed = 0;
+  double _segDuration = _defaultSegment;
+
+  /// 서버 갱신 간격의 이동 평균(초).
+  ///
+  /// 보고 주기를 상수로 박아 두면 그 값을 바꿀 때 양쪽을 함께 고쳐야 하고,
+  /// 한쪽만 고치면 아무도 눈치채지 못한 채 움직임이 어색해진다. 실측한다.
+  double _tickEstimate = _defaultSegment;
+
+  DateTime? _lastServerAt;
+
+  /// 위치 보고 주기(0.2초)를 기본값으로 삼는다.
+  static const double _defaultSegment = 0.2;
+
+  /// 구간 길이에 곱하는 여유. [Enemy] 와 같은 이유로 1 보다 커야 한다 —
+  /// 배정 시간이 실측 간격과 같으면 갱신이 늦을 때마다 도착해 **멈춘다.**
+  static const double _segmentSlack = 1.25;
+
+  /// 서버가 알려 준 바라보는 방향.
+  ///
+  /// **멈춰 있을 때가 이 값이 쓰이는 자리다.** 좌표가 그대로면 움직임에서
+  /// 방향을 뽑을 수 없어, 마지막으로 걸었던 쪽을 계속 바라보게 된다.
+  Vector2? _serverFacing;
 
   double _animTime = 0;
 
   /// 마지막으로 나아간 방향. 멈춰 있으면 직전 방향을 유지한다.
   double _renderYaw = 0;
+
+  /// 지금 그려지는 몸의 방향(화면 기준 라디안).
+  ///
+  /// 회귀 테스트가 "제자리에서 몸만 돌린 것" 을 확인하는 데 쓴다 — 좌표가
+  /// 그대로라 위치로는 검사할 수 없는 값이다.
+  @visibleForTesting
+  double get renderYaw => _renderYaw;
 
   /// 실제로 움직이고 있는지. 다리 애니메이션을 켤지 정한다.
   bool _moving = false;
@@ -103,7 +142,10 @@ class RemotePlayerEntity extends IsoEntity {
 
   /// 서버가 보낸 새 상태를 반영한다.
   void applySnapshot(RemotePlayer snapshot) {
-    _target = snapshot.grid.clone();
+    _beginSegment(snapshot.grid);
+    if (snapshot.facing.length2 > 0.0001) {
+      _serverFacing = (_serverFacing ?? Vector2.zero())..setFrom(snapshot.facing);
+    }
     name = snapshot.name;
     level = snapshot.level;
     alive = snapshot.alive;
@@ -133,29 +175,63 @@ class RemotePlayerEntity extends IsoEntity {
     hpRatio = ratio;
   }
 
+  /// 새 서버 좌표를 받아 보간 구간을 연다.
+  void _beginSegment(Vector2 serverGrid) {
+    final now = DateTime.now();
+    final last = _lastServerAt;
+    _lastServerAt = now;
+
+    if (last != null) {
+      final gap = now.difference(last).inMicroseconds / 1e6;
+      // 터무니없는 값은 버린다 — 재구독이나 탭 전환으로 한참 만에 온 갱신까지
+      // 평균에 넣으면 이후 움직임이 통째로 늘어진다.
+      if (gap > 0.02 && gap < 1.5) {
+        _tickEstimate = _tickEstimate * 0.7 + gap * 0.3;
+      }
+    }
+
+    _segFrom.setFrom(grid);
+    _segTo = serverGrid.clone();
+    _segElapsed = 0;
+    _segDuration = _tickEstimate * _segmentSlack;
+  }
+
   @override
   void update(double dt) {
     _animTime += dt;
     if (_healthBarTimer > 0) _healthBarTimer -= dt;
     if (_swingTimer > 0) _swingTimer = math.max(0, _swingTimer - dt);
 
-    final delta = _target - grid;
-    final distance = delta.length;
-
     // 멀리 벌어졌으면(접속 직후, 텔레포트, 오래 끊겼다 돌아옴) 걸어가는 시늉을
     // 하지 않고 곧바로 옮긴다. 월드를 가로질러 미끄러지는 모습이 더 이상하다.
-    if (distance > 12) {
-      grid.setFrom(_target);
+    if ((_segTo - grid).length > 12) {
+      grid.setFrom(_segTo);
+      _segFrom.setFrom(_segTo);
+      _segElapsed = _segDuration;
       _moving = false;
-    } else if (distance > 0.02) {
-      // 남은 거리에 비례해 따라간다. 보고 간격(0.2초)보다 조금 빠르게 잡아야
-      // 다음 보고가 오기 전에 목표에 닿아 멈칫거리지 않는다.
-      final step = math.min(1.0, dt * 9);
-      grid.addScaled(delta, step);
-      _moving = true;
-      _renderYaw = _yawFor(delta);
     } else {
-      _moving = false;
+      final span = _segTo - _segFrom;
+      _moving = span.length > 0.02;
+
+      // **구간을 시간으로 지나간다.** 남은 거리에 비례해 다가가면 도착 직전에
+      // 기어가다 새 값이 오면 튀어 나가, 등속으로 걷는 대신 갱신마다 멈칫거리는
+      // 모습이 된다.
+      if (_segElapsed < _segDuration) {
+        _segElapsed += dt;
+        final t = (_segElapsed / _segDuration).clamp(0.0, 1.0);
+        grid
+          ..setFrom(_segFrom)
+          ..addScaled(span, t);
+      }
+
+      // 서버가 준 방향이 언제나 이긴다. 이동에서 뽑는 것은 대체품이다 —
+      // 멈춰 선 사람은 좌표가 그대로라 이동에서 아무것도 나오지 않는다.
+      final server = _serverFacing;
+      if (server != null && server.length2 > 0.0001) {
+        _renderYaw = _yawFor(server);
+      } else if (_moving) {
+        _renderYaw = _yawFor(span);
+      }
     }
 
     super.update(dt);

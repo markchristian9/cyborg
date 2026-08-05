@@ -415,14 +415,38 @@ class Reducers {
   Future<TransactionResult> moveTo({
     required double gridX,
     required double gridY,
+    required double facingX,
+    required double facingY,
     List<OptimisticChange>? optimisticChanges,
     bool dropIfOffline = false,
   }) async {
     final encoder = BsatnEncoder();
     encoder.writeF32(gridX);
     encoder.writeF32(gridY);
+    encoder.writeF32(facingX);
+    encoder.writeF32(facingY);
     return await _reducerCaller.call(
       moveToDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
+  /// Calls the `on_update` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> onUpdate({
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    return await _reducerCaller.call(
+      onUpdateDef.name,
       encoder.toBytes(),
       optimisticChanges: optimisticChanges,
       dropIfOffline: dropIfOffline,
@@ -533,6 +557,26 @@ class Reducers {
     encoder.writeU32(totalXp);
     return await _reducerCaller.call(
       reportProgressDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
+  /// Calls the `reset_timers` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> resetTimers({
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    return await _reducerCaller.call(
+      resetTimersDef.name,
       encoder.toBytes(),
       optimisticChanges: optimisticChanges,
       dropIfOffline: dropIfOffline,
@@ -827,14 +871,33 @@ class Reducers {
   }
 
   StreamSubscription<void> onMoveTo(
-    void Function(EventContext ctx, double gridX, double gridY) callback,
+    void Function(
+      EventContext ctx,
+      double gridX,
+      double gridY,
+      double facingX,
+      double facingY,
+    )
+    callback,
   ) {
     return _reducerEmitter.on(moveToDef).listen((EventContext ctx) {
       final event = ctx.event;
       if (event is! ReducerEvent) return;
       final args = event.reducerArgs;
       if (args is! MoveToArgs) return;
-      callback(ctx, args.gridX, args.gridY);
+      callback(ctx, args.gridX, args.gridY, args.facingX, args.facingY);
+    });
+  }
+
+  StreamSubscription<void> onOnUpdate(
+    void Function(EventContext ctx) callback,
+  ) {
+    return _reducerEmitter.on(onUpdateDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! OnUpdateArgs) return;
+      callback(ctx);
     });
   }
 
@@ -895,6 +958,18 @@ class Reducers {
       final args = event.reducerArgs;
       if (args is! ReportProgressArgs) return;
       callback(ctx, args.totalXp);
+    });
+  }
+
+  StreamSubscription<void> onResetTimers(
+    void Function(EventContext ctx) callback,
+  ) {
+    return _reducerEmitter.on(resetTimersDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! ResetTimersArgs) return;
+      callback(ctx);
     });
   }
 

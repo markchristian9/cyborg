@@ -98,7 +98,44 @@ class Enemy extends IsoEntity with Damageable {
   /// 그 값을 즉시 반영하면 몹이 초당 세 번 순간이동하듯 튄다. 목표를 향해
   /// 보간하면 같은 데이터로도 걸어오는 것처럼 보인다 — 화면을 부드럽게 하려는
   /// 것이지 판정을 흉내 내는 것이 아니다. 사거리·피해는 언제나 서버가 정한다.
-  Vector2? _serverTarget;
+  /// 이번 보간 구간의 시작점. 서버 갱신이 올 때의 **화면 위치**다.
+  ///
+  /// 서버가 준 이전 좌표가 아니라 지금 그려지고 있는 자리에서 출발해야 한다.
+  /// 그러지 않으면 갱신마다 몸이 뒤로 튕겼다 다시 나아간다.
+  Vector2? _segFrom;
+
+  /// 이번 구간의 도착점. 서버가 마지막으로 알려 준 좌표다.
+  Vector2? _segTo;
+
+  /// 이 구간을 지나온 시간(초).
+  double _segElapsed = 0;
+
+  /// 이 구간에 배정한 시간(초). 실측 갱신 간격에서 뽑는다.
+  double _segDuration = _defaultSegment;
+
+  /// 서버 갱신 간격의 이동 평균(초).
+  ///
+  /// 서버 틱을 클라이언트가 상수로 알고 있으면 서버에서 그 값을 바꿀 때마다
+  /// 양쪽을 함께 고쳐야 하고, 한쪽만 고치면 아무도 눈치채지 못한 채 움직임이
+  /// 어색해진다. 실측해서 따라가면 그런 일이 없다.
+  double _tickEstimate = _defaultSegment;
+
+  /// 서버 갱신이 마지막으로 온 시각. 간격을 재는 기준이다.
+  DateTime? _lastServerAt;
+
+  /// 서버가 알려 준 바라보는 방향. 없으면 이동 방향에서 뽑는다.
+  Vector2? _serverFacing;
+
+  /// 갱신 간격을 아직 모를 때 쓰는 기본값(초). 서버 AI 틱과 같은 값이다.
+  static const double _defaultSegment = 0.15;
+
+  /// 구간 길이에 곱하는 여유. 1 보다 커야 한다.
+  ///
+  /// **이 값이 끊김을 없애는 핵심이다.** 배정 시간을 실측 간격과 똑같이 잡으면
+  /// 다음 갱신이 조금이라도 늦을 때마다 도착점에 닿아 **멈춘다** — 나아가다
+  /// 서고, 새 값이 오면 다시 나아가는 그 반복이 "뚝뚝 끊기며 순간이동하는"
+  /// 모습이다. 조금 느리게 지나가면 다음 값이 도착하기 전에 도달하지 않는다.
+  static const double _segmentSlack = 1.25;
 
   /// 서버가 보낸 상태를 반영한다. 서버가 모는 개체에만 쓴다.
   void applyServerState({
@@ -106,8 +143,15 @@ class Enemy extends IsoEntity with Damageable {
     required double hpRatio,
     required bool alive,
     required bool tagged,
+    Vector2? facing,
   }) {
-    (_serverTarget ??= Vector2.zero()).setFrom(grid);
+    _beginSegment(grid);
+
+    // 서버가 알려 준 방향이 있으면 그것이 맞다. **멈춰 있을 때가 이 값이 쓰이는
+    // 자리다** — 좌표가 그대로면 움직임에서 방향을 뽑을 수 없다.
+    if (facing != null && facing.length2 > 0.0001) {
+      _serverFacing = (_serverFacing ?? Vector2.zero())..setFrom(facing);
+    }
     if (hpRatio < _serverHpRatio) {
       // 남이 때린 것도 여기로 온다. 누가 때렸든 같은 연출이 나와야 여럿이
       // 함께 때리는 것이 화면에서 읽힌다.
@@ -216,35 +260,85 @@ class Enemy extends IsoEntity with Damageable {
     super.update(dt);
   }
 
-  /// 서버가 준 목표를 향해 미끄러진다.
+  /// 새 서버 좌표를 받아 보간 구간을 연다.
+  ///
+  /// 갱신 간격을 실측해 구간 길이로 삼는다. 서버 틱이 바뀌어도 클라이언트가
+  /// 저절로 따라가고, 네트워크가 흔들려도 평균 쪽으로 수렴한다.
+  void _beginSegment(Vector2 serverGrid) {
+    final now = DateTime.now();
+    final last = _lastServerAt;
+    _lastServerAt = now;
+
+    if (last != null) {
+      final gap = now.difference(last).inMicroseconds / 1e6;
+      // 터무니없는 값은 버린다 — 탭 전환으로 프레임이 멈췄거나 재구독으로
+      // 한참 만에 온 갱신까지 평균에 넣으면 이후 움직임이 통째로 늘어진다.
+      if (gap > 0.02 && gap < 1.0) {
+        _tickEstimate = _tickEstimate * 0.7 + gap * 0.3;
+      }
+    }
+
+    (_segFrom ??= Vector2.zero()).setFrom(grid);
+    (_segTo ??= Vector2.zero()).setFrom(serverGrid);
+    _segElapsed = 0;
+    _segDuration = _tickEstimate * _segmentSlack;
+  }
+
+  /// 서버가 준 두 좌표 사이를 **시간으로** 지나간다.
   ///
   /// 화면을 부드럽게 하려는 것이지 판정을 흉내 내는 것이 아니다. 사거리·피해는
   /// 언제나 서버가 정하고, 여기서 계산한 위치는 그리기에만 쓴다.
+  ///
+  /// 목표를 향해 남은 거리에 비례해 다가가는 방식(지수 감쇠)을 쓰지 않는다.
+  /// 그 방식은 가까워질수록 느려져 **도착 직전에 기어가다** 새 값이 오면 다시
+  /// 튀어 나가므로, 등속으로 걷는 것이 아니라 매 갱신마다 멈칫거리는 모습이
+  /// 된다. 구간을 시간으로 나누면 처음부터 끝까지 같은 속도로 지나간다.
   void _followServer(double dt) {
-    final target = _serverTarget;
-    if (target == null) return;
+    final from = _segFrom;
+    final to = _segTo;
+    if (from == null || to == null) return;
 
-    final delta = target - grid;
-    final distance = delta.length;
-
-    if (distance > 8) {
-      // 리스폰처럼 멀리 옮겨진 경우다. 월드를 가로질러 미끄러지는 모습이
-      // 더 이상하므로 곧바로 옮긴다.
-      grid.setFrom(target);
+    if ((to - grid).length > 8) {
+      // 리스폰이나 텔레포트처럼 멀리 옮겨졌다. 월드를 가로질러 미끄러지는
+      // 모습이 더 이상하므로 곧바로 옮긴다.
+      grid.setFrom(to);
+      from.setFrom(to);
+      _segElapsed = _segDuration;
       phase = EnemyPhase.idle;
+      _applyFacing(null);
       return;
     }
 
-    if (distance <= 0.02) {
-      phase = EnemyPhase.idle;
-      return;
+    final span = to - from;
+    final moving = span.length > 0.01;
+
+    if (_segElapsed < _segDuration) {
+      _segElapsed += dt;
+      final t = (_segElapsed / _segDuration).clamp(0.0, 1.0);
+      grid
+        ..setFrom(from)
+        ..addScaled(span, t);
     }
 
-    // 보고 간격(0.3초)보다 조금 빠르게 따라붙어야 다음 보고가 오기 전에
-    // 목표에 닿아 멈칫거리지 않는다.
-    grid.addScaled(delta, math.min(1, dt * 8));
-    facing.setFrom(delta.normalized());
-    phase = EnemyPhase.chase;
+    phase = moving ? EnemyPhase.chase : EnemyPhase.idle;
+    _applyFacing(moving ? span : null);
+  }
+
+  /// 바라보는 쪽을 정한다. **서버가 준 방향이 언제나 이긴다.**
+  ///
+  /// 이동에서 뽑은 방향은 대체품이다 — 멈춰 서서 때리는 몹은 좌표가 그대로라
+  /// 이동에서는 아무것도 나오지 않고, 그러면 마지막으로 걸어온 쪽을 계속
+  /// 바라보게 된다. 옆으로 돌아 들어간 사람에게는 제 등을 향해 휘두르는
+  /// 몹으로 보인다.
+  void _applyFacing(Vector2? movement) {
+    final server = _serverFacing;
+    if (server != null && server.length2 > 0.0001) {
+      facing.setFrom(server.normalized());
+      return;
+    }
+    if (movement != null && movement.length2 > 0.0001) {
+      facing.setFrom(movement.normalized());
+    }
   }
 
   void _updateAi(double dt) {

@@ -594,7 +594,9 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
     // 내 위치를 알리고, 남들이 어디 있는지 받아 온다. 이 두 줄이 "같은 월드에
     // 있다" 를 실제로 만드는 지점이다.
-    presence.report(player.grid);
+    // 방향도 함께 보낸다. 멈춰 서서 몸만 돌리는 동작은 좌표에 남지 않아,
+    // 이것이 없으면 남의 화면에서 나는 마지막으로 걸었던 쪽만 계속 바라본다.
+    presence.report(player.grid, player.facing);
     _syncRemotePlayers();
     // 서버가 확정한 내 상태를 몸에 옮겨 담는다. 보고 **뒤에** 두는 이유는,
     // 방금 보낸 좌표에 대한 답이 아직 오지 않았기 때문이다 — 먼저 두면 한 프레임
@@ -1274,6 +1276,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
           hpRatio: snapshot.hpRatio,
           alive: snapshot.alive,
           tagged: snapshot.taggedByMe,
+          facing: snapshot.facing,
         );
         continue;
       }
@@ -1291,6 +1294,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         hpRatio: snapshot.hpRatio,
         alive: snapshot.alive,
         tagged: snapshot.taggedByMe,
+        facing: snapshot.facing,
       );
       _activeMonsters[snapshot.id] = enemy;
       enemies.add(enemy);

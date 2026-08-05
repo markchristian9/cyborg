@@ -298,11 +298,20 @@ class LogoutArgsDecoder implements ReducerArgDecoder<LogoutArgs> {
 }
 
 class MoveToArgs {
-  MoveToArgs({required this.gridX, required this.gridY});
+  MoveToArgs({
+    required this.gridX,
+    required this.gridY,
+    required this.facingX,
+    required this.facingY,
+  });
 
   final double gridX;
 
   final double gridY;
+
+  final double facingX;
+
+  final double facingY;
 }
 
 class MoveToArgsDecoder implements ReducerArgDecoder<MoveToArgs> {
@@ -312,7 +321,27 @@ class MoveToArgsDecoder implements ReducerArgDecoder<MoveToArgs> {
   MoveToArgs decode(BsatnDecoder decoder) {
     final gridX = decoder.readF32();
     final gridY = decoder.readF32();
-    return MoveToArgs(gridX: gridX, gridY: gridY);
+    final facingX = decoder.readF32();
+    final facingY = decoder.readF32();
+    return MoveToArgs(
+      gridX: gridX,
+      gridY: gridY,
+      facingX: facingX,
+      facingY: facingY,
+    );
+  }
+}
+
+class OnUpdateArgs {
+  OnUpdateArgs();
+}
+
+class OnUpdateArgsDecoder implements ReducerArgDecoder<OnUpdateArgs> {
+  const OnUpdateArgsDecoder();
+
+  @override
+  OnUpdateArgs decode(BsatnDecoder decoder) {
+    return OnUpdateArgs();
   }
 }
 
@@ -396,6 +425,19 @@ class ReportProgressArgsDecoder
   ReportProgressArgs decode(BsatnDecoder decoder) {
     final totalXp = decoder.readU32();
     return ReportProgressArgs(totalXp: totalXp);
+  }
+}
+
+class ResetTimersArgs {
+  ResetTimersArgs();
+}
+
+class ResetTimersArgsDecoder implements ReducerArgDecoder<ResetTimersArgs> {
+  const ResetTimersArgsDecoder();
+
+  @override
+  ResetTimersArgs decode(BsatnDecoder decoder) {
+    return ResetTimersArgs();
   }
 }
 
@@ -525,6 +567,10 @@ const leaveWorldDef = ReducerDef<LeaveWorldArgs>(
 const loginDef = ReducerDef<LoginArgs>('login', LoginArgsDecoder());
 const logoutDef = ReducerDef<LogoutArgs>('logout', LogoutArgsDecoder());
 const moveToDef = ReducerDef<MoveToArgs>('move_to', MoveToArgsDecoder());
+const onUpdateDef = ReducerDef<OnUpdateArgs>(
+  'on_update',
+  OnUpdateArgsDecoder(),
+);
 const pickLootDef = ReducerDef<PickLootArgs>(
   'pick_loot',
   PickLootArgsDecoder(),
@@ -544,6 +590,10 @@ const registerAccountDef = ReducerDef<RegisterAccountArgs>(
 const reportProgressDef = ReducerDef<ReportProgressArgs>(
   'report_progress',
   ReportProgressArgsDecoder(),
+);
+const resetTimersDef = ReducerDef<ResetTimersArgs>(
+  'reset_timers',
+  ResetTimersArgsDecoder(),
 );
 const selectCharacterDef = ReducerDef<SelectCharacterArgs>(
   'select_character',

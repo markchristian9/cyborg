@@ -131,10 +131,17 @@ const MONSTER_TICK_SECS: u64 = 5;
 
 /// 몬스터 AI 주기(밀리초).
 ///
-/// 짧을수록 추격이 매끄럽지만 그만큼 트랜잭션이 늘어난다. 0.3 초면 몹이
-/// 한 번에 0.5 타일 남짓 움직이고, 클라이언트가 그 사이를 보간해 걸어오는
-/// 것처럼 보인다.
-const MONSTER_AI_MILLIS: u64 = 300;
+/// 짧을수록 추격이 매끄럽지만 그만큼 트랜잭션이 늘어난다. 0.15 초면 몹이
+/// 한 번에 0.36 타일씩 움직이고, 클라이언트가 그 사이를 보간해 걸어오는 것처럼
+/// 보인다.
+///
+/// **0.3 초에서 절반으로 줄였다.** 보간은 두 스냅샷 사이를 메우는 일이라
+/// 갱신 간격만큼의 지연을 반드시 안고 간다 — 0.3 초면 몹이 방향을 튼 것이
+/// 화면에 닿기까지 그만큼 걸려, 아무리 매끄럽게 그려도 "따라오다 갑자기 꺾는"
+/// 모습이 남는다. MMO 가 보통 쓰는 10~20 Hz 의 아래쪽에 맞춘 값이고, 훑는
+/// 범위는 플레이어 주변 청크뿐이라 비용은 접속자 수에 비례할 뿐 몹 수와는
+/// 무관하다.
+const MONSTER_AI_MILLIS: u64 = 150;
 
 /// 몬스터가 플레이어를 알아채는 거리(타일).
 ///
@@ -364,6 +371,25 @@ pub struct WorldPlayer {
     #[default(Timestamp::UNIX_EPOCH)]
     pub last_damaged_at: Timestamp,
 
+    /// 관심 영역 구독용 공간 청크. `player_sub_chunk_of(grid_x, grid_y)` 로 만든다.
+    ///
+    /// **지금 좌표로 정한다.** 몹의 [`chunk`](Monster::chunk) 가 집 좌표인 것과
+    /// 반대다 — 구독은 "지금 화면에 보여야 할 것" 을 고르는 일이므로 현재 위치가
+    /// 기준이어야 한다.
+    ///
+    /// **좌표를 쓰는 모든 곳에서 함께 갱신해야 한다.** 하나라도 빠뜨리면 그 사람은
+    /// 옛 청크에 남아, 본인 화면에서는 주변이 비고 남들 화면에는 유령이 남는다.
+    /// 특히 사망 재가동([`apply_damage_to_player`])은 좌표를 월드 중심으로 되돌리
+    /// 므로 놓치기 쉽다.
+    ///
+    /// **이 자리를 옮기면 안 된다.** 이미 배포된 표에서 이 열은
+    /// `last_damaged_at` 과 `last_attack_at` 사이에 있다. 열 순서가 바뀌면
+    /// SpacetimeDB 는 자동 마이그레이션을 거부한다("Reordering table ...
+    /// requires a manual migration") — 새 열은 반드시 **맨 끝**에 붙이고,
+    /// 이미 있는 열은 제자리에 두어야 한다.
+    #[default(0u32)]
+    pub sub_chunk: u32,
+
     /// 마지막으로 공격을 **휘두른** 시각.
     ///
     /// 다른 사람 화면에서 이 몸이 공격 동작을 하려면, 공격이 일어났다는 사실
@@ -398,22 +424,20 @@ pub struct WorldPlayer {
     #[default(0u32)]
     pub attack_skill: u32,
 
-    /// 관심 영역 구독용 공간 청크. `player_sub_chunk_of(grid_x, grid_y)` 로 만든다.
+    /// 바라보는 방향(정규화된 그리드 벡터).
     ///
-    /// **지금 좌표로 정한다.** 몹의 [`chunk`](Monster::chunk) 가 집 좌표인 것과
-    /// 반대다 — 구독은 "지금 화면에 보여야 할 것" 을 고르는 일이므로 현재 위치가
-    /// 기준이어야 한다.
+    /// 좌표만으로는 **멈춰 선 사람의 방향**을 알 수 없다. 가만히 서서 몸만 돌려
+    /// 사방을 살피는 동작이 남의 화면에서는 통째로 사라지고, 마지막으로 걸었던
+    /// 쪽을 계속 바라보는 모습이 된다. PK 가 허용되는 월드에서 상대가 어디를
+    /// 보고 있는지는 덤빌지 물러설지를 가르는 정보다.
     ///
-    /// **좌표를 쓰는 모든 곳에서 함께 갱신해야 한다.** 하나라도 빠뜨리면 그 사람은
-    /// 옛 청크에 남아, 본인 화면에서는 주변이 비고 남들 화면에는 유령이 남는다.
-    /// 특히 사망 재가동([`apply_damage_to_player`])은 좌표를 월드 중심으로 되돌리
-    /// 므로 놓치기 쉽다.
-    ///
-    /// 맨 끝에 있고 기본값이 있어야 한다([`next_teleport_at`](WorldPlayer::next_teleport_at)
-    /// 과 같은 이유). 기본값 0 은 좌상단 청크라 실제 위치와 어긋나지만, 다음
-    /// 좌표 보고 한 번이면 제 값을 얻는다.
-    #[default(0u32)]
-    pub sub_chunk: u32,
+    /// 맨 끝에 있고 기본값이 있어야 한다([`sub_chunk`](WorldPlayer::sub_chunk) 와
+    /// 같은 이유).
+    #[default(0.0f32)]
+    pub facing_x: f32,
+
+    #[default(1.0f32)]
+    pub facing_y: f32,
 }
 
 /// 월드에 상주하는 몬스터 한 마리.
@@ -502,6 +526,19 @@ pub struct Monster {
     /// 맨 끝에 있고 기본값이 있어야 한다([`chunk`](Monster::chunk) 와 같은 이유).
     #[default(0u32)]
     pub pos_chunk: u32,
+
+    /// 바라보는 방향(정규화된 그리드 벡터).
+    ///
+    /// **멈춰 있을 때가 이 값이 필요한 이유다.** 움직이는 동안은 좌표 변화로
+    /// 방향을 유추할 수 있지만, 사거리 안에 붙어 때리는 몹은 제자리에 선다 —
+    /// 그때 화면마다 다른 쪽을 보고 있으면 누구를 노리는지가 사람마다 달라진다.
+    ///
+    /// 맨 끝에 있고 기본값이 있어야 한다([`chunk`](Monster::chunk) 와 같은 이유).
+    #[default(0.0f32)]
+    pub face_x: f32,
+
+    #[default(1.0f32)]
+    pub face_y: f32,
 }
 
 /// 바닥에 떨어진 전리품 하나.
@@ -908,6 +945,10 @@ pub fn bootstrap(ctx: &ReducerContext) {
                     level,
                     home_x: x,
                     home_y: y,
+                    // 처음에는 화면 아래쪽(플레이어 기준 정면)을 본다. 첫
+                    // 추격에서 제 방향을 얻는다.
+                    face_x: 0.0,
+                    face_y: 1.0,
                     grid_x: x,
                     grid_y: y,
                     chunk: chunk_of(x, y),
@@ -959,12 +1000,30 @@ fn ensure_timers(ctx: &ReducerContext) {
         log::info!("몬스터 정비 타이머를 걸었다({MONSTER_TICK_SECS}초 주기).");
     }
 
+    // **주기를 바꿨으면 다시 걸어야 한다.** 스케줄 행은 한 번 넣으면 그 값으로
+    // 계속 도므로, 상수만 고쳐 배포하면 코드와 실제 주기가 조용히 어긋난다.
+    // 실측으로 확인한 함정이다 — 300ms 를 150ms 로 바꿔 배포했는데 로그의
+    // 간격은 그대로 300ms 였다.
+    let ai_interval: TimeDuration =
+        std::time::Duration::from_millis(MONSTER_AI_MILLIS).into();
+    let ai_stale = ctx
+        .db
+        .monster_ai_timer()
+        .iter()
+        .any(|t| t.scheduled_at != ScheduleAt::Interval(ai_interval));
+    if ai_stale {
+        for timer in ctx.db.monster_ai_timer().iter().collect::<Vec<_>>() {
+            ctx.db
+                .monster_ai_timer()
+                .scheduled_id()
+                .delete(timer.scheduled_id);
+        }
+        log::info!("몬스터 AI 타이머 주기가 달라 다시 건다.");
+    }
     if ctx.db.monster_ai_timer().count() == 0 {
         ctx.db.monster_ai_timer().insert(MonsterAiTimer {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Interval(
-                std::time::Duration::from_millis(MONSTER_AI_MILLIS).into(),
-            ),
+            scheduled_at: ScheduleAt::Interval(ai_interval),
         });
         log::info!("몬스터 AI 타이머를 걸었다({MONSTER_AI_MILLIS}ms 주기).");
     }
@@ -978,6 +1037,34 @@ fn ensure_timers(ctx: &ReducerContext) {
         });
         log::info!("회복 타이머를 걸었다({REGEN_TICK_MILLIS}ms 주기).");
     }
+}
+
+/// 주기 작업 타이머를 지금 상수로 다시 건다.
+///
+/// [`ensure_timers`] 는 배포 훅에서도 돌지만, 그 훅이 실제로 도는지는 서버
+/// 구현에 달려 있다. 주기를 바꿨는데 로그의 간격이 그대로일 때 **확실하게**
+/// 손볼 수 있는 길이 하나 필요하다.
+///
+/// ⚠️ 운영용이다. 부르는 순간 옛 주기의 스케줄 행이 지워지고 새로 걸린다.
+#[spacetimedb::reducer]
+pub fn reset_timers(ctx: &ReducerContext) {
+    for timer in ctx.db.monster_ai_timer().iter().collect::<Vec<_>>() {
+        ctx.db
+            .monster_ai_timer()
+            .scheduled_id()
+            .delete(timer.scheduled_id);
+    }
+    for timer in ctx.db.monster_tick_timer().iter().collect::<Vec<_>>() {
+        ctx.db
+            .monster_tick_timer()
+            .scheduled_id()
+            .delete(timer.scheduled_id);
+    }
+    for timer in ctx.db.regen_timer().iter().collect::<Vec<_>>() {
+        ctx.db.regen_timer().scheduled_id().delete(timer.scheduled_id);
+    }
+    ensure_timers(ctx);
+    log::info!("타이머를 모두 다시 걸었다.");
 }
 
 /// 몬스터를 전부 걷어내고 지금 규칙으로 다시 심는다.
@@ -1202,6 +1289,9 @@ pub fn enter_world(ctx: &ReducerContext, grid_x: f32, grid_y: f32) -> Result<(),
         attack_dir_x: 0.0,
         attack_dir_y: 0.0,
         attack_skill: ATTACK_SKILL_NONE,
+        // 입장할 때는 화면 아래쪽을 본다. 첫 보고에서 제 방향을 얻는다.
+        facing_x: 0.0,
+        facing_y: 1.0,
     };
 
     match ctx.db.world_player().identity().find(ctx.sender()) {
@@ -1225,7 +1315,13 @@ pub fn leave_world(ctx: &ReducerContext) -> Result<(), String> {
 /// 상한을 넘으면 거절하는 대신 갈 수 있는 데까지만 당겨서 받아들인다. 거절하면
 /// 지연이 한 번 튈 때마다 화면이 뒤로 끌려가 조작감이 무너지기 때문이다.
 #[spacetimedb::reducer]
-pub fn move_to(ctx: &ReducerContext, grid_x: f32, grid_y: f32) -> Result<(), String> {
+pub fn move_to(
+    ctx: &ReducerContext,
+    grid_x: f32,
+    grid_y: f32,
+    facing_x: f32,
+    facing_y: f32,
+) -> Result<(), String> {
     let me = require_world_player(ctx)?;
 
     // 쓰러진 몸은 걷지 않는다. 이 검사가 없으면 사망 판정과 재가동 사이에 들어온
@@ -1259,11 +1355,26 @@ pub fn move_to(ctx: &ReducerContext, grid_x: f32, grid_y: f32) -> Result<(), Str
         )
     };
 
+    // 방향은 자르지 않고 그대로 받는다. 속도 상한과 달리 방향은 아무리 빨리
+    // 돌려도 부정이 되지 않는다 — 제자리에서 몸을 도는 것은 원래 즉시 되는 일이다.
+    // 다만 쓰레기 값이 들어오면 남의 화면에서 몸이 엉뚱하게 서므로 검사는 한다.
+    let (fx, fy) = if facing_x.is_finite()
+        && facing_y.is_finite()
+        && (facing_x * facing_x + facing_y * facing_y) > 0.0001
+    {
+        let len = (facing_x * facing_x + facing_y * facing_y).sqrt();
+        (facing_x / len, facing_y / len)
+    } else {
+        (me.facing_x, me.facing_y)
+    };
+
     ctx.db.world_player().identity().update(WorldPlayer {
         grid_x: next_x,
         grid_y: next_y,
         sub_chunk: player_sub_chunk_of(next_x, next_y),
         last_move_at: ctx.timestamp,
+        facing_x: fx,
+        facing_y: fy,
         ..me
     });
 
@@ -1733,10 +1844,14 @@ pub fn monster_ai(ctx: &ReducerContext, _timer: MonsterAiTimer) {
                     step,
                 );
                 if moved_enough(nx, ny, &monster) {
+                    let (fx, fy) =
+                        unit_toward(monster.grid_x, monster.grid_y, monster.home_x, monster.home_y);
                     ctx.db.monster().id().update(Monster {
                         grid_x: nx,
                         grid_y: ny,
                         pos_chunk: chunk_of(nx, ny),
+                        face_x: fx,
+                        face_y: fy,
                         ..monster
                     });
                     moved += 1;
@@ -1765,10 +1880,14 @@ pub fn monster_ai(ctx: &ReducerContext, _timer: MonsterAiTimer) {
                 step,
             );
             if moved_enough(nx, ny, &monster) {
+                let (fx, fy) =
+                    unit_toward(monster.grid_x, monster.grid_y, player.grid_x, player.grid_y);
                 ctx.db.monster().id().update(Monster {
                     grid_x: nx,
                     grid_y: ny,
                     pos_chunk: chunk_of(nx, ny),
+                    face_x: fx,
+                    face_y: fy,
                     ..monster
                 });
                 moved += 1;
@@ -1776,15 +1895,33 @@ pub fn monster_ai(ctx: &ReducerContext, _timer: MonsterAiTimer) {
             continue;
         }
 
-        // 닿았다. 맞는 쪽의 쿨다운을 본다 — 여러 몹이 한 틱에 몰아치면
-        // 손쓸 새 없이 즉사한다.
+        // 닿았다. 제자리에 서지만 **대상 쪽은 본다.**
+        //
+        // 좌표가 멈추므로 클라이언트는 방향을 유추할 길이 없다. 이 갱신이 없으면
+        // 때리는 몹이 마지막으로 걸어온 쪽을 계속 바라보고, 옆으로 돌아 들어간
+        // 사람은 자기 등 뒤를 향해 휘두르는 몹을 보게 된다.
+        //
+        // 실제로 각도가 달라졌을 때만 쓴다. 매 틱 갱신하면 붙어 선 몹 수만큼
+        // 트랜잭션이 늘어나는데, 얻는 것은 눈에 보이지도 않는 미세한 각도다.
+        let level = monster.level;
+        let (fx, fy) = unit_toward(monster.grid_x, monster.grid_y, player.grid_x, player.grid_y);
+        if (fx - monster.face_x).abs() > 0.08 || (fy - monster.face_y).abs() > 0.08 {
+            ctx.db.monster().id().update(Monster {
+                face_x: fx,
+                face_y: fy,
+                ..monster
+            });
+        }
+
+        // 맞는 쪽의 쿨다운을 본다 — 여러 몹이 한 틱에 몰아치면 손쓸 새 없이
+        // 즉사한다.
         if ctx.timestamp < player.next_hurt_at {
             continue;
         }
 
         // 때린 사실만 모아 둔다. 실제 판정은 아래에서 한 번에 한다 — 여러 몹이
         // 같은 사람을 때렸을 때 방어·무적·사망을 각자 따로 계산하면 어긋난다.
-        *hurt.entry(player.identity).or_insert(0) += monster.level as i32;
+        *hurt.entry(player.identity).or_insert(0) += level as i32;
         hits += 1;
     }
 

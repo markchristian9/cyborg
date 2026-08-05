@@ -19,7 +19,9 @@ class RemotePlayer {
     this.lastAttackAtMicros = 0,
     Vector2? attackDir,
     this.attackSkill = AttackSkill.none,
-  }) : attackDir = attackDir ?? Vector2.zero();
+    Vector2? facing,
+  })  : attackDir = attackDir ?? Vector2.zero(),
+        facing = facing ?? Vector2.zero();
 
   /// 캐릭터 식별자. 같은 사람을 프레임마다 다시 찾는 열쇠다.
   final int characterId;
@@ -53,6 +55,12 @@ class RemotePlayer {
 
   /// 무엇으로 쳤는지. [AttackSkill] 의 값과 같다.
   final int attackSkill;
+
+  /// 바라보는 방향(정규화된 그리드 벡터).
+  ///
+  /// **멈춰 있을 때 필요한 값이다.** 좌표가 그대로면 움직임에서 방향을 뽑을 수
+  /// 없어, 남의 화면에서는 마지막으로 걸었던 쪽을 계속 바라보게 된다.
+  final Vector2 facing;
 
   double get hpRatio => maxHp <= 0 ? 0 : (hp / maxHp).clamp(0.0, 1.0);
 }
@@ -118,7 +126,8 @@ class ServerMonster {
     required this.maxHp,
     required this.alive,
     required this.taggedByMe,
-  });
+    Vector2? facing,
+  }) : facing = facing ?? Vector2.zero();
 
   /// 서버가 부여한 번호. 공격할 때 이 값을 보낸다.
   final int id;
@@ -133,6 +142,10 @@ class ServerMonster {
 
   /// 내가 선점한 몹인지. 크레딧이 나에게 오는지를 화면에 표시하는 데 쓴다.
   final bool taggedByMe;
+
+  /// 바라보는 방향. 사거리 안에 붙어 때리는 몹은 좌표가 멈추므로, 이 값이
+  /// 없으면 화면마다 다른 쪽을 보고 있게 된다.
+  final Vector2 facing;
 
   double get hpRatio => maxHp <= 0 ? 0 : (hp / maxHp).clamp(0.0, 1.0);
 }
@@ -187,8 +200,12 @@ abstract class WorldPresence {
   /// 월드에서 나온다. 게임을 접을 때 부른다.
   void leave() {}
 
-  /// 내 위치를 알린다. 매 프레임 불러도 되며, 실제 전송 빈도는 구현이 정한다.
-  void report(Vector2 grid) {}
+  /// 내 위치와 **바라보는 방향**을 알린다.
+  ///
+  /// 매 프레임 불러도 되며 실제 전송 빈도는 구현이 정한다. 방향을 함께 보내는
+  /// 이유는 멈춰 선 동안에도 몸을 돌리는 일이 남의 화면에 보여야 하기
+  /// 때문이다 — 좌표만 보내면 그 동작이 통째로 사라진다.
+  void report(Vector2 grid, Vector2 facing) {}
 
   /// 나를 뺀 다른 요원들. 서버에 붙지 않았으면 빈 목록이다.
   List<RemotePlayer> get others => const [];

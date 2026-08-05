@@ -129,13 +129,12 @@ void main() {
       await client.disconnect();
     });
 
-    await pumpUntil(() => client.worldPlayer.iter().any(
-          (p) => p.identity == client.identity,
-        ));
+    // **`my_world_player` view 로 확인한다.** 청크 구독은 요청한 좌표 둘레를
+    // 가져오는데 서버는 나를 중심으로 옮겨 세우므로, 그쪽에는 내 행이 없다 —
+    // 바로 그 어긋남 때문에 이 view 가 필요했다.
+    await pumpUntil(() => client.myWorldPlayer != null);
 
-    final me = client.worldPlayer
-        .iter()
-        .firstWhere((p) => p.identity == client.identity);
+    final me = client.myWorldPlayer!;
     expect(me.gridX, closeTo(503, 0.01));
     expect(me.gridY, closeTo(503, 0.01));
   });
@@ -162,7 +161,12 @@ void main() {
     // 안전지대 중심에서 조금 걸어 나간다. 속도 상한(14타일/초)에 걸리지
     // 않도록 한 걸음만 옮긴다.
     final target = before.gridX + 3;
-    await alice.reducers.moveTo(gridX: target, gridY: before.gridY);
+    await alice.reducers.moveTo(
+      gridX: target,
+      gridY: before.gridY,
+      facingX: 1,
+      facingY: 0,
+    );
 
     await pumpUntil(() {
       final now = bob.worldPlayer
