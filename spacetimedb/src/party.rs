@@ -29,6 +29,16 @@
 //! 그래서 [`PartyMember::following_character_id`] 는 "따라가는 중" 이라는 사실만
 //! 기록하고, 그 사실을 본 클라이언트가 자기 자동 사냥의 중심을 리더 위치로 옮긴다.
 //!
+//! ## 파티는 접속과 함께 끝난다
+//!
+//! 월드를 떠나면([`on_character_left`]) 파티에서도 빠진다. 접속 종료·강제 종료·
+//! 월드 이탈이 모두 같다. 다시 들어오면 새로 맺는다.
+//!
+//! 남겨 두는 편이 친절해 보이지만 그렇지 않다 — 조종하는 사람이 없는 파티가
+//! 생기고, 파티장이 앱을 닫으면 남은 사람은 해산도 위임도 부를 수 없다(둘 다
+//! 파티장 전용). 파티는 함께 다니기 위한 것이라 함께 있지 않으면 남겨 둘 이유가
+//! 없다.
+//!
 //! ## 표가 모두 비공개인 이유
 //!
 //! [`crate`] 의 설계 원칙 3 번(모든 표가 비공개)을 그대로 지킨다.
@@ -846,9 +856,9 @@ fn view_character_id(ctx: &ViewContext) -> Option<u64> {
 /// 호출자가 고른 캐릭터를 꺼낸다.
 ///
 /// [`crate::world::require_world_player`] 를 쓰지 않고 세션에서 바로 도출하는
-/// 이유는 **파티가 월드 밖에서도 유지되어야** 하기 때문이다. 사냥터에서 나와
-/// 캐릭터 화면에 가 있는 동안 파티가 풀리면, 잠깐 자리를 비운 것과 파티를 떠난
-/// 것이 구별되지 않는다. 월드에 있어야 하는 것은 초대의 *대상*뿐이다.
+/// 이유는 파티를 다루는 동작 중 일부가 월드 밖에서도 성립하기 때문이다(받은
+/// 초대를 거절하는 것 따위). 월드를 **떠나면** 파티에서도 빠지지만
+/// ([`on_character_left`]), 그 판단은 여기가 아니라 떠나는 자리에서 한다.
 fn require_character(ctx: &ReducerContext) -> Result<u64, String> {
     let session = require_session(ctx)?;
     session
@@ -928,6 +938,42 @@ fn clear_invites_for(ctx: &ReducerContext, character_id: u64) {
         .collect();
     for id in ids {
         ctx.db.party_invite().id().delete(id);
+    }
+}
+
+/// 월드를 떠난 캐릭터를 파티에서 빼낸다.
+///
+/// 접속 종료·강제 종료·월드 이탈이 모두 여기로 온다. **파티는 접속과 함께
+/// 끝난다** — 다시 들어오면 새로 맺는다.
+///
+/// ## 왜 남겨 두지 않는가
+///
+/// 처음에는 "잠깐 자리를 비운 것과 파티를 떠난 것은 다르다" 는 이유로 남겨
+/// 뒀는데, 그렇게 두면 조종하는 사람이 없는 파티가 생긴다. 파티장이 앱을 닫으면
+/// 남은 사람은 해산도 위임도 부를 수 없고(둘 다 파티장 전용), 각자 나가는 것
+/// 말고는 손쓸 방법이 없다. 파티는 함께 다니기 위한 것이라 함께 있지 않으면
+/// 남겨 둘 이유가 없다.
+///
+/// 뒤처리는 [`remove_member`] 가 한다 — 이끌기 종료, 따라가던 사람 해제,
+/// 파티장 승계, 혼자 남으면 해체까지 한 곳에서 일어난다.
+pub(crate) fn on_character_left(ctx: &ReducerContext, character_id: u64) {
+    // 답하지 않은 초대부터 지운다. 파티에 속하지 않은 사람도 초대는 받아 둘 수
+    // 있으므로 멤버십과 따로 정리해야 한다.
+    clear_invites_for(ctx, character_id);
+
+    let sent: Vec<u64> = ctx
+        .db
+        .party_invite()
+        .iter()
+        .filter(|invite| invite.from_character_id == character_id)
+        .map(|invite| invite.id)
+        .collect();
+    for id in sent {
+        ctx.db.party_invite().id().delete(id);
+    }
+
+    if let Some(member) = ctx.db.party_member().character_id().find(character_id) {
+        remove_member(ctx, member.party_id, character_id);
     }
 }
 

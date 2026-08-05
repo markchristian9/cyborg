@@ -72,6 +72,8 @@ class SpacetimePartySession extends PartySession {
 
   @override
   void detach() {
+    // 구독만 닫는다. 파티에서 빠지는 것은 `leave_world`·`on_disconnect` 가 서버에서
+    // 처리하므로 여기서 탈퇴를 따로 부르면 같은 일을 두 번 하는 셈이다.
     _generation++;
     final id = _querySetId;
     if (id != null) {

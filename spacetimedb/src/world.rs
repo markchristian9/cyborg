@@ -129,24 +129,29 @@ const RESPAWN_MICROS: i64 = 20_000_000;
 /// 몬스터 정비(리스폰) 주기(초).
 const MONSTER_TICK_SECS: u64 = 5;
 
-/// 몬스터 AI 주기(밀리초). **20 Hz** — 이 게임의 월드 틱이다.
+/// 몬스터 AI 주기(마이크로초). **24 Hz** — 이 게임의 월드 틱이다.
 ///
-/// 짧을수록 추격이 매끄럽지만 그만큼 트랜잭션이 늘어난다. 0.05 초면 몹이
-/// 한 번에 0.12 타일씩 움직이고, 클라이언트가 그 사이를 보간해 걸어오는 것처럼
+/// 밀리초가 아니라 마이크로초로 두는 이유가 있다. 1/24 초는 41.666… ms 로
+/// **밀리초로 떨어지지 않는다.** 41ms 로 반올림하면 24.39Hz, 42ms 면 23.81Hz 라
+/// 어느 쪽도 24 틱이 아니다. 마이크로초로 두면 41,667μs = 23.9998Hz 로,
+/// 하루를 돌려도 어긋남이 1 틱 미만이다.
+///
+/// 짧을수록 추격이 매끄럽지만 그만큼 트랜잭션이 늘어난다. 1/24 초면 몹이
+/// 한 번에 0.1 타일씩 움직이고, 클라이언트가 그 사이를 보간해 걸어오는 것처럼
 /// 보인다.
 ///
-/// **0.3 → 0.15 → 0.05 초로 줄여 왔다.** 보간은 두 스냅샷 사이를 메우는 일이라
-/// 갱신 간격만큼의 지연을 반드시 안고 간다 — 간격이 길면 몹이 방향을 튼 것이
-/// 화면에 닿기까지 그만큼 걸려, 아무리 매끄럽게 그려도 "따라오다 갑자기 꺾는"
-/// 모습이 남는다. MMORPG 가 보통 쓰는 10~30 Hz 의 한가운데에 맞춘 값이고,
-/// 클라이언트의 좌표 보고 주기([`spacetime_world_presence.dart`] 의 `_interval`)
-/// 와 같은 20 Hz 라 PC 와 몹이 같은 리듬으로 갱신된다.
+/// **0.3 → 0.15 → 0.05 → 1/24 초로 줄여 왔다.** 보간은 두 스냅샷 사이를 메우는
+/// 일이라 갱신 간격만큼의 지연을 반드시 안고 간다 — 간격이 길면 몹이 방향을 튼
+/// 것이 화면에 닿기까지 그만큼 걸려, 아무리 매끄럽게 그려도 "따라오다 갑자기
+/// 꺾는" 모습이 남는다. MMORPG 가 보통 쓰는 10~30 Hz 안이고, 클라이언트의 좌표
+/// 보고 주기([`spacetime_world_presence.dart`] 의 `_interval`)와 같은 24 Hz 라
+/// PC 와 몹이 같은 리듬으로 갱신된다.
 ///
 /// 훑는 범위는 플레이어 주변 청크뿐이라 한 틱의 비용은 접속자 수에 비례할 뿐
 /// 몹 수와는 무관하다. 그리고 실제 쓰기는 [`moved_enough`] 가 거르므로,
-/// 목표에 도착해 서 있는 몹은 20 Hz 로 판정해도 **한 번도 브로드캐스트되지
+/// 목표에 도착해 서 있는 몹은 24 Hz 로 판정해도 **한 번도 브로드캐스트되지
 /// 않는다** — 늘어나는 것은 판정 비용이지 델타 폭이 아니다.
-const MONSTER_AI_MILLIS: u64 = 50;
+const MONSTER_AI_MICROS: u64 = 41_667;
 
 /// 몬스터가 플레이어를 알아채는 거리(타일).
 ///
@@ -1025,7 +1030,7 @@ fn ensure_timers(ctx: &ReducerContext) {
     // 실측으로 확인한 함정이다 — 300ms 를 150ms 로 바꿔 배포했는데 로그의
     // 간격은 그대로 300ms 였다.
     let ai_interval: TimeDuration =
-        std::time::Duration::from_millis(MONSTER_AI_MILLIS).into();
+        std::time::Duration::from_micros(MONSTER_AI_MICROS).into();
     let ai_stale = ctx
         .db
         .monster_ai_timer()
@@ -1045,7 +1050,7 @@ fn ensure_timers(ctx: &ReducerContext) {
             scheduled_id: 0,
             scheduled_at: ScheduleAt::Interval(ai_interval),
         });
-        log::info!("몬스터 AI 타이머를 걸었다({MONSTER_AI_MILLIS}ms 주기).");
+        log::info!("몬스터 AI 타이머를 걸었다({MONSTER_AI_MICROS}μs 주기).");
     }
 
     if ctx.db.regen_timer().count() == 0 {
@@ -1325,6 +1330,10 @@ pub fn enter_world(ctx: &ReducerContext, grid_x: f32, grid_y: f32) -> Result<(),
 /// 월드에서 나간다.
 #[spacetimedb::reducer]
 pub fn leave_world(ctx: &ReducerContext) -> Result<(), String> {
+    // 파티는 접속과 함께 끝난다. 캐릭터를 알아내려면 행을 지우기 전에 읽어야 한다.
+    if let Some(me) = ctx.db.world_player().identity().find(ctx.sender()) {
+        crate::party::on_character_left(ctx, me.character_id);
+    }
     ctx.db.world_player().identity().delete(ctx.sender());
     Ok(())
 }
@@ -1794,7 +1803,7 @@ pub fn monster_ai(ctx: &ReducerContext, _timer: MonsterAiTimer) {
         return;
     }
 
-    let dt = MONSTER_AI_MILLIS as f32 / 1000.0;
+    let dt = MONSTER_AI_MICROS as f32 / 1_000_000.0;
     let step = MONSTER_SPEED * dt;
     let mut moved = 0u32;
     let mut hits = 0u32;
@@ -2095,9 +2104,9 @@ pub fn pick_loot(ctx: &ReducerContext, loot_id: u64) -> Result<(), String> {
 
 /// 새 좌표가 표에 쓸 만큼 움직였는가.
 ///
-/// **변화 없는 `update` 는 그 행을 구독한 모두에게 델타를 만든다.** 몹은 20 Hz 로
+/// **변화 없는 `update` 는 그 행을 구독한 모두에게 델타를 만든다.** 몹은 24 Hz 로
 /// 판정하므로, 목표에 이미 도착한 몹을 매 틱 다시 쓰면 아무 일도 일어나지 않는데
-/// 초당 스무 번씩 전원에게 좌표가 밀려간다. [`regen_tick`] 이 만피·만마인 사람을
+/// 초당 스물네 번씩 전원에게 좌표가 밀려간다. [`regen_tick`] 이 만피·만마인 사람을
 /// 건너뛰는 것과 같은 원칙이며, **틱을 올릴수록 이 걸러내기가 중요해진다.**
 ///
 /// 기준은 0.01 타일 — 화면에서 보이지 않는 크기이며,

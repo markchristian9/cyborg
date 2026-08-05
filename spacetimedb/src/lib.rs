@@ -237,6 +237,13 @@ pub fn on_disconnect(ctx: &ReducerContext) {
     // 세션과 달리 월드에서는 즉시 내보낸다. 남겨 두면 조종하는 사람이 없는
     // 캐릭터가 사냥터 한복판에 서 있게 되고, 다른 요원 눈에는 가만히 서서
     // 몹을 선점만 하고 있는 것으로 보인다.
+    //
+    // 파티도 함께 끝낸다. 조종하는 사람이 없는 파티를 남겨 두면 파티장이 앱을
+    // 닫은 순간 남은 사람이 해산도 위임도 못 하는 상태가 된다. 캐릭터를 알아내야
+    // 하므로 월드 행을 지우기 **전에** 읽는다.
+    if let Some(me) = ctx.db.world_player().identity().find(ctx.sender()) {
+        party::on_character_left(ctx, me.character_id);
+    }
     ctx.db.world_player().identity().delete(ctx.sender());
     log::debug!("연결 해제: {}", ctx.sender());
 }
