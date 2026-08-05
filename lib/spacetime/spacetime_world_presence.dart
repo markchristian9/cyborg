@@ -22,7 +22,7 @@ class SpacetimeWorldPresence extends WorldPresence {
 
   final SpacetimeDbClient _client;
 
-  /// 좌표를 서버에 올리는 간격. **24 Hz** — 서버 월드 틱과 같다.
+  /// 한산할 때 좌표를 올리는 간격. **24 Hz** — 서버 월드 틱과 같다.
   ///
   /// 마이크로초로 두는 이유는 1/24 초가 41.666… ms 라 **밀리초로 떨어지지 않기**
   /// 때문이다. 41ms 는 24.39Hz, 42ms 는 23.81Hz 로 어느 쪽도 24 틱이 아니다.
@@ -35,7 +35,47 @@ class SpacetimeWorldPresence extends WorldPresence {
   /// 지연을 반드시 안고 가므로, 5 Hz 에서는 아무리 매끄럽게 그려도 남이 방향을
   /// 튼 것이 0.2초 뒤에 닿았다. 서버 `MONSTER_AI_MICROS`(41,667μs)와 같은
   /// 리듬이라 PC 와 몹이 함께 갱신된다.
-  static const Duration _interval = Duration(microseconds: 41667);
+  static const Duration _fastInterval = Duration(microseconds: 41667);
+
+  /// 붐빌 때 내려가는 하한. **8 Hz**.
+  ///
+  /// 이보다 더 낮추지 않는 이유는 보간이 메워야 할 구간이 0.45 타일이 되어,
+  /// 방향을 바꾸며 뛰는 사람의 궤적이 눈에 띄게 각지기 때문이다.
+  static const Duration _slowInterval = Duration(microseconds: 125000);
+
+  /// 이 인원까지는 [_fastInterval] 을 그대로 쓴다.
+  ///
+  /// 8 명이 24 Hz 로 서로를 갱신하면 초당 1,536 행이다. 그 정도가 한 사람이
+  /// 감당할 만한 몫이고, 파티 하나가 통째로 들어가는 크기이기도 하다.
+  static const int _calmCrowd = 8;
+
+  /// 지금 보내야 할 간격. **주변 인원이 정한다.**
+  ///
+  /// 🛑 **거리로 차등할 수 없어서 혼잡도로 차등한다.** 구독은 행 단위라 한 번
+  /// 쓰면 그 행을 구독한 전원에게 같은 델타가 간다 — "가까운 사람에게는 24 Hz,
+  /// 먼 사람에게는 8 Hz" 를 보내는 길이 없다. 보내는 쪽이 고를 수 있는 것은
+  /// **자기 좌표를 얼마나 자주 쓸 것인가** 하나뿐이다.
+  ///
+  /// 그래서 기준을 뒤집는다. 받는 사람과의 거리가 아니라 **내 갱신이 몇 명에게
+  /// 퍼지는가**를 본다. 서로를 구독하는 N 명이 만드는 델타는 N² 에 비례하므로,
+  /// 인원에 반비례해 빈도를 낮추면 총량이 N 에 비례하는 선까지 눌린다.
+  ///
+  /// ```text
+  ///   8 명 → 24 Hz     1,536 행/초
+  ///  16 명 → 12 Hz     3,072 행/초
+  ///  24 명 →  8 Hz     4,608 행/초
+  ///  50 명 →  8 Hz    20,000 행/초  (하한에 걸린다)
+  /// ```
+  ///
+  /// 하한이 있어 50 명에서도 완전한 N 비례는 되지 않지만, 고정 24 Hz 의 6 만
+  /// 행에서 3 분의 1 로 준다. 사람이 몰릴수록 서로가 화면 구석의 작은 점이 되므로
+  /// 잃는 것은 크지 않다.
+  Duration get _interval {
+    final crowd = _rows.value.length;
+    if (crowd <= _calmCrowd) return _fastInterval;
+    final scaled = _fastInterval * (crowd / _calmCrowd);
+    return scaled > _slowInterval ? _slowInterval : scaled;
+  }
 
   /// 이 거리(타일)보다 적게 움직였으면 보내지 않는다.
   ///
@@ -55,9 +95,15 @@ class SpacetimeWorldPresence extends WorldPresence {
 
   /// 새 청크 안쪽으로 이만큼 들어온 뒤에야 구독을 옮긴다(타일).
   ///
-  /// 경계선 위를 왕복하면 재구독이 진동한다. 보행 3.6 타일/초에서 최소 2.2 초,
-  /// 최대 속도 14 타일/초에서도 0.57 초 간격이 보장된다.
-  static const double _chunkHysteresis = 8.0;
+  /// 경계선 위를 왕복하면 재구독이 진동한다. 보행 3.6 타일/초에서 최소 0.97 초
+  /// 간격이 보장되고, 그보다 잦은 재구독은 [_resubCooldown] 이 막는다.
+  ///
+  /// 🛑 **청크 크기와 함께 움직여야 하는 값이다.** 청크의 11 % 라는 비율을 지킨다
+  /// (74 타일 시절의 8 이 그 비율이었다). 청크만 줄이고 이 값을 그대로 두면
+  /// 히스테리시스가 청크 반에 가까워져 **재구독이 거의 일어나지 않는다.** 그러면
+  /// 경계를 넘고도 옛 구독에 남아 주변이 통째로 비어 보인다 — 조용히 일어나는
+  /// 데다 원인이 이 상수에 있다는 것을 알아채기 어렵다.
+  static const double _chunkHysteresis = 3.5;
 
   /// 재구독 최소 간격. 넉백·대시로 경계를 스치는 경우까지 흡수한다.
   static const Duration _resubCooldown = Duration(milliseconds: 1500);

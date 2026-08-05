@@ -38,10 +38,15 @@ const List<String> kCyborgViewSubscriptions = [
 /// 플레이어 구독용 청크 한 변(타일). 서버 `PLAYER_SUB_CHUNK_TILES` 와 같아야 한다.
 ///
 /// 어긋나면 청크 번호가 서로 다른 격자를 가리켜 **아무도 서로를 보지 못한다.**
-const int kPlayerSubChunkTiles = 74;
+///
+/// 3×3 을 구독하므로 AOI 는 96×96 m 다(타일 = 미터). 74(222×222 m)에서 줄인
+/// 값이며, **하한을 정하는 것은 부하가 아니라 보장 반경**이다 — 최대 축소 화면이
+/// 덮는 반경(21~42 타일)보다 작아지면 화면 안의 요원이 조용히 사라진다.
+/// 근거는 서버 쪽 상수 문서에 적어 두었다.
+const int kPlayerSubChunkTiles = 32;
 
 /// 한 줄에 들어가는 플레이어 구독 청크 수. 서버 `PLAYER_SUB_CHUNKS_PER_ROW` 와 같다.
-const int kPlayerSubChunksPerRow = 14; // (1006 / 74) + 1
+const int kPlayerSubChunksPerRow = 32; // (1006 / 32) + 1
 
 /// 몬스터·전리품 구독용 청크 한 변(타일). 서버 `CHUNK_TILES` 와 같다.
 ///
