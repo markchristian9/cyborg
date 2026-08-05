@@ -776,10 +776,13 @@ fn monster_max_hp(build: &str, level: u32) -> i32 {
     (base * hp_scale(build)).round() as i32
 }
 
-/// 몹을 잡았을 때 주는 경험치.
+/// 몹을 잡았을 때 주는 경험치. **나누기 전의 총량**이다.
 ///
-/// 레벨 차이는 보지 않는다. 개별 사냥이라 남의 몹을 대신 잡아 줄 이유가 없고,
-/// 고레벨이 저레벨 사냥터를 쓸어 담아도 얻는 것이 적어 자연히 갈라진다.
+/// 잡은 사람의 레벨은 보지 않는다. 혼자 잡았다면 고레벨이 저레벨 사냥터를 쓸어
+/// 담아도 얻는 것이 적어 자연히 갈라지기 때문이다.
+///
+/// 파티가 나눌 때는 이야기가 다르다 — 손 하나 대지 않고 곁에 서 있기만 해도
+/// 몫이 오므로 레벨 격차를 따로 본다([`crate::party::split_xp`]).
 ///
 /// 클라이언트 `MonsterCodex._statsFor` 의 `baseXp = 10 + (level-1) * 9` 와 같은 식이다.
 fn monster_xp(build: &str, level: u32) -> u32 {
@@ -2348,8 +2351,13 @@ fn apply_damage_to_player(
 
 /// 킬을 확정하고 경험치를 준다.
 ///
-/// 경험치는 **선점자에게만** 간다. 막타를 넣은 사람이 따로 있으면 기록에만
-/// 남기고 보상은 주지 않는다.
+/// **크레딧은 선점자 한 사람의 것이고, 경험치만 파티가 나눈다.** 막타를 넣은
+/// 사람이 따로 있어도 기록에만 남고 보상은 없다 — 가로채기가 성립하지 않는다는
+/// 규칙은 파티가 생겨도 그대로다.
+///
+/// 나누는 규칙은 [`crate::party::split_xp`] 가 쥐고 있다. 여기서는 자리를 모아
+/// 넘기고 결과를 받아 적을 뿐이다. 파티가 없거나 곁에 아무도 없으면 예전과 똑같이
+/// 선점자가 전액을 받는다.
 fn award_kill(
     ctx: &ReducerContext,
     owner_character_id: u64,
@@ -2369,6 +2377,66 @@ fn award_kill(
 
     let name = character.name.clone();
 
+    // 곁에서 함께 사냥한 파티원을 모아 몫을 정한다. 파티가 없으면 빈 목록이 와서
+    // 아래 `unwrap_or(xp)` 가 예전 동작(전액 지급)으로 되돌린다.
+    let seats = crate::party::xp_share_seats(
+        ctx,
+        owner_character_id,
+        character.level,
+        mx,
+        my,
+    );
+    let shares = crate::party::split_xp(xp, monster_level, &seats);
+
+    let owner_xp = shares
+        .iter()
+        .find(|(id, _)| *id == owner_character_id)
+        .map(|(_, amount)| *amount)
+        .unwrap_or(xp);
+
+    // 선점자는 이미 행을 손에 들고 있으므로 다시 찾지 않는다.
+    grant_xp(ctx, character, owner_xp);
+
+    for (character_id, amount) in &shares {
+        if *character_id == owner_character_id {
+            continue;
+        }
+        let Some(member) = ctx.db.player_character().id().find(*character_id) else {
+            // 나누는 사이에 캐릭터가 지워졌다. 나머지 사람들의 몫은 그대로 간다.
+            continue;
+        };
+        grant_xp(ctx, member, *amount);
+    }
+
+    spawn_loot(ctx, monster_kind, monster_level, owner_character_id, mx, my);
+
+    ctx.db.monster_kill().insert(MonsterKill {
+        id: 0,
+        character_id: owner_character_id,
+        character_name: name,
+        monster_kind: monster_kind.to_string(),
+        monster_level,
+        // 나눈 뒤 **선점자가 실제로 받은** 값이다. 몹이 주는 총량이 아니다 —
+        // 기록을 나중에 읽는 사람이 "이 킬로 내가 얼마를 얻었나" 를 물을 것이기
+        // 때문이다. 총량은 `monster_kind`·`monster_level` 로 언제든 다시 구한다.
+        xp_awarded: owner_xp,
+        last_hit_by,
+        killed_at: ctx.timestamp,
+    });
+}
+
+/// 캐릭터 한 명에게 경험치를 주고, 레벨이 올랐으면 월드 상태도 따라 올린다.
+///
+/// 파티 분배가 생기면서 이 일이 킬 한 번에 여러 번 일어나게 되어 따로 뽑았다.
+/// 나눠 받는 사람도 레벨업해야 하는데, 그때 체력 상한이 따라 오르지 않으면
+/// "레벨은 올랐는데 몸은 그대로" 인 상태가 남는다.
+fn grant_xp(ctx: &ReducerContext, character: PlayerCharacter, xp: u32) {
+    if xp == 0 {
+        return;
+    }
+
+    let character_id = character.id;
+
     // 누적에 더하고 레벨·진행도는 거기서 다시 만든다. 성장의 진실은
     // `total_xp` 하나이고 나머지는 그 사본이다.
     let total_xp = character.total_xp.saturating_add(xp);
@@ -2383,40 +2451,24 @@ fn award_kill(
     });
 
     // 레벨이 올랐으면 월드 상태의 체력 상한도 따라 올린다.
-    if let Some(world_player) = ctx
-        .db
-        .world_player()
-        .character_id()
-        .find(owner_character_id)
-    {
-        if world_player.level != level {
-            // 마력 상한도 함께 올린다. 체력만 올리면 레벨이 오를수록 스킬을
-            // 쓸 수 있는 횟수가 상대적으로 줄어, 성장할수록 약해지는 축이
-            // 생긴다.
-            let max_hp = max_hp_for_level(level);
-            let max_mp = max_mp_for_level(level);
-            ctx.db.world_player().identity().update(WorldPlayer {
-                level,
-                max_hp,
-                hp: max_hp,
-                max_mp,
-                mp: max_mp,
-                ..world_player
-            });
-        }
+    let Some(world_player) = ctx.db.world_player().character_id().find(character_id) else {
+        return;
+    };
+    if world_player.level == level {
+        return;
     }
 
-    spawn_loot(ctx, monster_kind, monster_level, owner_character_id, mx, my);
-
-    ctx.db.monster_kill().insert(MonsterKill {
-        id: 0,
-        character_id: owner_character_id,
-        character_name: name,
-        monster_kind: monster_kind.to_string(),
-        monster_level,
-        xp_awarded: xp,
-        last_hit_by,
-        killed_at: ctx.timestamp,
+    // 마력 상한도 함께 올린다. 체력만 올리면 레벨이 오를수록 스킬을 쓸 수 있는
+    // 횟수가 상대적으로 줄어, 성장할수록 약해지는 축이 생긴다.
+    let max_hp = max_hp_for_level(level);
+    let max_mp = max_mp_for_level(level);
+    ctx.db.world_player().identity().update(WorldPlayer {
+        level,
+        max_hp,
+        hp: max_hp,
+        max_mp,
+        mp: max_mp,
+        ..world_player
     });
 }
 

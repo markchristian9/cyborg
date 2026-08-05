@@ -110,8 +110,11 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
   /// 파티 — 누구와 함께 다니는지. 서버가 없으면 파티가 없는 것과 같다.
   ///
-  /// 파티는 **보상을 나누지 않는다.** 함께 다니고 따라다니게 할 뿐이며,
-  /// 경험치는 몹을 선점한 사람에게만 간다(`CLAUDE.md` Multiplayer).
+  /// 파티는 **경험치를 나눈다.** 몹이 쓰러진 자리에서 30 타일 안에 살아 있는
+  /// 파티원끼리 나누며, 자기 레벨이 몹 레벨에 가까울수록 많이 받는다. 전리품과
+  /// 킬 기록은 여전히 선점자 한 사람의 것이다(`CLAUDE.md` Multiplayer).
+  ///
+  /// 나누는 판단은 전부 서버가 한다 — 여기서는 누가 파티원인지만 안다.
   final PartySession party;
 
   /// 월드 메뉴에서 로그아웃을 선택했을 때 호출된다.
@@ -1196,7 +1199,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     GameAudio.play(Sfx.uiClick);
     _followStopping = false;
     partyFollow.reset();
-    _showBanner('추종을 시작한다 — 경험치는 각자 몫이다');
+    _showBanner('추종을 시작한다 — 곁에서 잡으면 경험치를 나눈다');
     // 어느 이끌기인지 함께 보낸다. 그 사이 이끄는 사람이 바뀌었으면 서버가
     // 거절하고, 누른 것과 다른 사람을 따라가는 일이 생기지 않는다.
     unawaited(_runPartyAction(() => party.acceptHuntLead(party.huntLeadSeq)));

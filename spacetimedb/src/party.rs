@@ -1,22 +1,30 @@
-//! 파티 — 함께 다니기 위한 것이지 보상을 나누기 위한 것이 아니다.
+//! 파티 — 함께 다니고, 곁에서 잡은 경험치를 나눈다.
 //!
 //! ## 파티가 하는 일과 하지 않는 일
 //!
-//! 파티는 **누가 누구와 함께 다니는가**만 정한다. 경험치도 드롭도 나누지 않는다.
-//! 킬 크레딧은 [`crate::world`] 의 선점 태그 그대로다 — 처음 때린 사람이 몹의
-//! 주인이고 경험치는 그 사람에게만 간다.
+//! 나누는 것은 **경험치 하나뿐**이다([`split_xp`]). 킬 크레딧은 [`crate::world`] 의
+//! 선점 태그 그대로라, 처음 때린 사람이 몹의 주인이고 전리품도 기록도 그 사람의
+//! 것이다. "남이 선점한 몹을 뺏고 싶으면 몹이 아니라 그 사람을 쓰러뜨려라"
+//! ([`crate::world`] 머리말)는 규칙은 파티가 생겨도 한 글자도 바뀌지 않는다.
 //!
-//! 나누지 않는 이유는 두 가지다.
+//! ## 나누기로 하면서 감수한 것
 //!
-//! 첫째, **선점 태그는 PK 의 동기와 한 세트다**. "남이 선점한 몹을 뺏고 싶으면
-//! 몹이 아니라 그 사람을 쓰러뜨려라"([`crate::world`] 머리말)가 사냥터 다툼을
-//! 만든다. 파티에 분배를 넣으면 파티가 곧 상호 PK 면제 구역이 되어 그 동기가
-//! 통째로 사라진다.
+//! **자동 사냥과 추종이 함께 있는 게임에서 분배는 다계정에 이득을 준다.** 여러
+//! 계정이 한 사람 뒤를 따라다니게 하는 것이 여기서는 버튼 몇 번이고, 서버는 전투를
+//! 보지 않으므로 그것을 사람의 손과 가려낼 수단이 없다. 이것은 막은 것이 아니라
+//! **상한을 씌운 것**이다. 세 가지가 함께 그 상한을 만든다.
 //!
-//! 둘째, **자동 사냥과 추종이 함께 있으면 분배는 곧 봇 농장이 된다.** 여러 계정이
-//! 한 사람 뒤를 따라다니게 하는 것이 이 게임에서는 버튼 몇 번이다. 서버는 전투를
-//! 보지 않으므로 그것을 가려낼 수단이 없다. 분배가 없으면 그렇게 해서 얻는 것이
-//! 없다 — 각자 자기 몹을 자기가 때려야 하므로 계정 수만큼 노동만 늘어난다.
+//! 1. **총량이 인원에 선형으로 늘지 않는다** — 열둘이 붙어 있어도 2.1 배가 끝이라
+//!    (`XP_PARTY_BONUS_PERCENT_PER_MEMBER`), 계정을 몇 개 더 붙이든 그 이상은 없다.
+//! 2. **부계정이 놀고 있으면 오히려 손해다** — 몫은 곁에 선 사람 수로 나뉘므로,
+//!    따라다니기만 하는 계정을 붙이면 본계정이 자기 킬에서 받는 양이 줄어든다.
+//!    이득을 보려면 그 계정들도 각자 몹을 잡아야 한다.
+//! 3. **같은 레벨대여야 한다** — 레벨 격차 계수([`xp_gap_percent`])가 갓 만든
+//!    캐릭터를 데려오는 길을 막는다. 부계정을 쓸 만하게 만들려면 그 계정으로
+//!    직접 사냥해 레벨을 맞춰야 한다.
+//!
+//! 그래서 남는 이득은 "여러 계정을 실제로 굴리는 만큼"이고, 그것은 여러 사람이
+//! 함께 사냥하는 것과 서버가 구별할 수 없는 -- 구별할 필요도 없는 -- 일이다.
 //!
 //! ## 추종은 왜 여기에 없는가
 //!
@@ -1170,9 +1178,238 @@ fn remove_member(ctx: &ReducerContext, party_id: u64, character_id: u64) {
     }
 }
 
+// ── 경험치 분배 ─────────────────────────────────────────────────────────
+//
+// 파티의 값어치는 여기서 나온다. 함께 다니는 것만으로는 각자 사냥하는 것과
+// 다를 바가 없고, 오히려 같은 사냥터를 나눠 쓰느라 손해다. 그래서 **곁에 있는
+// 동안 서로의 사냥이 서로에게 보탬이 되게** 한다.
+//
+// 킬 크레딧은 여전히 선점자 한 사람의 것이다(전리품·기록). 나누는 것은 경험치
+// 하나뿐이라, "누가 잡았는가" 를 둘러싼 규칙은 하나도 바뀌지 않는다.
+
+/// 나눠 받을 수 있는 거리(타일 = m). 몹이 쓰러진 자리에서 잰다.
+///
+/// [`NEARBY_INVITE_RANGE_TILES`] 와 같은 값이고, 같아야 한다 — 한 번에 부를 수
+/// 있는 사람과 함께 사냥한 것으로 치는 사람이 다르면 "불렀는데 왜 안 나뉘지" 가
+/// 된다. 상수를 따로 둔 것은 뜻이 다르기 때문이다(부르는 거리와 나누는 거리).
+const XP_SHARE_RANGE_TILES: f32 = NEARBY_INVITE_RANGE_TILES;
+
+/// 함께 있는 사람이 한 명 늘 때마다 총량에 얹는 몫(백분율).
+///
+/// **파티가 손해가 되지 않게 하는 값이다.** 이 값이 없으면 파티는 순수한 감산이
+/// 된다 — 잡던 몹은 그대로인데 몫만 n 분의 1 이 되므로 아무도 파티를 맺지 않는다.
+///
+/// 각자 자기 몹을 잡는 이 게임에서는 킬이 인원수만큼 자주 일어나므로, 한 사람이
+/// 시간당 받는 양은 `1 + 0.1 × (n-1)` 배가 된다(둘이면 1.1 배, 열둘이면 2.1 배).
+/// 즉 **붙어서 사냥하는 무리가 흩어져 사냥하는 무리보다 빠르다.** 그것이 파티를
+/// 맺을 이유다.
+const XP_PARTY_BONUS_PERCENT_PER_MEMBER: u32 = 10;
+
+/// 온전히 받는 레벨 차이. 이 안이면 몹 레벨을 따지지 않는다.
+const XP_GAP_FULL: u32 = 10;
+
+/// 절반만 받는 레벨 차이의 상한.
+const XP_GAP_HALF: u32 = 20;
+
+/// 사분의 일만 받는 레벨 차이의 상한. 넘으면 한 톨도 받지 못한다.
+const XP_GAP_QUARTER: u32 = 30;
+
+/// 분배에 참여하는 한 자리.
+///
+/// 표 행이 아니라 값으로 받는 이유는 [`split_xp`] 를 데이터베이스 없이 검사하기
+/// 위해서다. 분배 규칙은 파티 기능에서 가장 틀리기 쉬운 곳이라(정수 나눗셈·
+/// 나머지·계수 곱의 순서) 따로 떼어 시험할 수 있어야 한다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct XpSeat {
+    pub character_id: u64,
+    pub level: u32,
+
+    /// 몹을 선점한 사람인가. 한 자리에 한 명뿐이다.
+    pub is_owner: bool,
+}
+
+/// 레벨 격차에 따라 남는 몫(백분율).
+///
+/// ## 왜 양쪽을 다 깎는가
+///
+/// 두 가지를 한 규칙으로 막는다.
+///
+/// - **끌어올리기** — 갓 시작한 캐릭터를 만렙 무리에 끼워 두면, 손 하나 대지 않고
+///   레벨 200 몹의 경험치를 나눠 받는다. 파티 분배를 도입하는 순간 생기는 구멍이고,
+///   막지 않으면 이 게임의 성장은 "아는 고렙이 있는가" 하나로 결정된다.
+/// - **쓸어 담기** — 반대로 만렙이 저레벨 사냥터에 눌러앉아, 순삭으로 킬 수를
+///   불려 파티원 전원의 몫을 빨아들이는 것도 막는다.
+///
+/// 그래서 거리가 아니라 **절댓값**으로 본다. "내 레벨과 이 몹의 레벨이 얼마나
+/// 맞는가" 하나로 읽히는 편이 두 규칙을 따로 설명하는 것보다 낫다.
+///
+/// ## 왜 계단인가
+///
+/// 선형으로 줄이면 경계가 없어 사람이 자기 몫을 예측하지 못한다. 계단이면
+/// "열 레벨까지는 온전하다" 로 외울 수 있다. 형제 게임 라리엔도 선형 감산
+/// (`levelGapFullExp`)을 쓰다 계단(`overlevelRewardScale`)으로 바꿨다.
+///
+/// **선점자에게는 적용하지 않는다**([`split_xp`]). 직접 때려서 잡은 사람은 그 몹을
+/// 감당할 수 있다는 것을 증명했고, 이 계수가 막으려는 것은 증명하지 않은 몫이다.
+fn xp_gap_percent(character_level: u32, monster_level: u32) -> u32 {
+    let gap = character_level.abs_diff(monster_level);
+    if gap <= XP_GAP_FULL {
+        100
+    } else if gap <= XP_GAP_HALF {
+        50
+    } else if gap <= XP_GAP_QUARTER {
+        25
+    } else {
+        0
+    }
+}
+
+/// 몹 하나의 경험치를 자리들에게 나눈다. 받을 것이 없는 사람은 결과에서 빠진다.
+///
+/// [`seats`](XpSeat) 가 비어 있으면 빈 결과를 낸다 — 파티가 없다는 뜻이고,
+/// 부르는 쪽이 기존 단독 지급으로 간다.
+///
+/// ## 순서가 규칙이다
+///
+/// 1. 자리가 하나뿐이면(곁에 아무도 없으면) **단독과 같다.** 보너스도 감산도 없다.
+///    파티에 속했다는 이유만으로 혼자 하는 사냥이 달라지면 안 된다.
+/// 2. 총량을 인원수만큼 늘린다([`XP_PARTY_BONUS_PERCENT_PER_MEMBER`]).
+/// 3. 총량을 **균등하게** 나눈다. 레벨 비례로 나누지 않는 이유는 그것이 격차
+///    계수와 이중으로 겹치기 때문이다 — 저렙은 몫도 작고 계수도 낮아 두 번 깎인다.
+/// 4. 각자의 몫에 격차 계수를 곱한다. **깎인 몫은 남에게 가지 않고 사라진다.**
+///    재분배하면 자격 없는 사람을 데려오는 것이 남은 사람에게 이득이 되어,
+///    계수가 막으려던 일을 오히려 부추긴다.
+/// 5. 정수 나눗셈의 나머지는 선점자가 가져간다. 흩뿌리는 것보다 명분이 분명하고,
+///    누구에게 갈지 정하려고 다시 정렬할 필요도 없다(같은 입력에 같은 결과).
+pub fn split_xp(base_xp: u32, monster_level: u32, seats: &[XpSeat]) -> Vec<(u64, u32)> {
+    if seats.is_empty() {
+        return Vec::new();
+    }
+
+    // 받을 자격이 있는 자리만 센다. 선점자는 격차와 무관하게 늘 자격이 있다.
+    let percents: Vec<u32> = seats
+        .iter()
+        .map(|seat| {
+            if seat.is_owner {
+                100
+            } else {
+                xp_gap_percent(seat.level, monster_level)
+            }
+        })
+        .collect();
+
+    let eligible = percents.iter().filter(|p| **p > 0).count() as u32;
+
+    // 곁에 나눌 사람이 없다 — 파티에 속했을 뿐 혼자 사냥한 것이다.
+    if eligible <= 1 {
+        return seats
+            .iter()
+            .filter(|seat| seat.is_owner)
+            .map(|seat| (seat.character_id, base_xp))
+            .collect();
+    }
+
+    let bonus = 100 + XP_PARTY_BONUS_PERCENT_PER_MEMBER * (eligible - 1);
+    let total = (base_xp as u64 * bonus as u64) / 100;
+    let share = total / eligible as u64;
+    let remainder = total - share * eligible as u64;
+
+    let mut out = Vec::with_capacity(seats.len());
+    for (seat, percent) in seats.iter().zip(percents.iter()) {
+        if *percent == 0 {
+            continue;
+        }
+        let mut amount = share * *percent as u64 / 100;
+        if seat.is_owner {
+            amount += remainder;
+        }
+        if amount == 0 {
+            continue;
+        }
+        out.push((seat.character_id, amount.min(u32::MAX as u64) as u32));
+    }
+    out
+}
+
+/// 몹이 쓰러진 자리 곁에서 함께 사냥한 파티원을 모은다.
+///
+/// 선점자가 파티에 속하지 않으면 빈 목록이다 — 나눌 일이 없다는 뜻이다.
+///
+/// **선점자는 거리를 재지 않고 넣는다.** 방금 그 몹을 때린 사람이므로 곁에 있는
+/// 것이 당연하지만, 몹이 쫓아오다 멀리서 쓰러지거나 원거리로 마무리한 경우까지
+/// 거리로 자르면 자기가 잡은 몹의 경험치를 자기가 못 받는 일이 생긴다.
+///
+/// 나머지는 세 가지를 모두 만족해야 한다.
+///
+/// - 같은 파티일 것
+/// - 월드에 서 있고 살아 있을 것 — 쓰러져 있는 사람은 사냥에 참여하지 않았다
+/// - 몹이 쓰러진 자리에서 [`XP_SHARE_RANGE_TILES`] 안일 것
+pub fn xp_share_seats(
+    ctx: &ReducerContext,
+    owner_character_id: u64,
+    owner_level: u32,
+    monster_x: f32,
+    monster_y: f32,
+) -> Vec<XpSeat> {
+    let Some(owner_seat) = ctx.db.party_member().character_id().find(owner_character_id) else {
+        return Vec::new();
+    };
+
+    let mut seats = vec![XpSeat {
+        character_id: owner_character_id,
+        level: owner_level,
+        is_owner: true,
+    }];
+
+    let range_sq = XP_SHARE_RANGE_TILES * XP_SHARE_RANGE_TILES;
+    for member in ctx.db.party_member().by_party().filter(owner_seat.party_id) {
+        if member.character_id == owner_character_id {
+            continue;
+        }
+        let Some(player) = ctx
+            .db
+            .world_player()
+            .character_id()
+            .find(member.character_id)
+        else {
+            continue;
+        };
+        if !player.alive {
+            continue;
+        }
+        if dist_sq(player.grid_x, player.grid_y, monster_x, monster_y) > range_sq {
+            continue;
+        }
+        seats.push(XpSeat {
+            character_id: member.character_id,
+            level: player.level,
+            is_owner: false,
+        });
+    }
+
+    seats
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 시험용 자리. 번호와 레벨만 다르고 나머지는 같다.
+    fn seat(character_id: u64, level: u32) -> XpSeat {
+        XpSeat {
+            character_id,
+            level,
+            is_owner: false,
+        }
+    }
+
+    fn owner(character_id: u64, level: u32) -> XpSeat {
+        XpSeat {
+            character_id,
+            level,
+            is_owner: true,
+        }
+    }
 
     #[test]
     fn 파티_정원은_열두명이다() {
@@ -1227,5 +1464,141 @@ mod tests {
     #[test]
     fn 초대는_이십초만_살아_있다() {
         assert_eq!(INVITE_TTL_MICROS, 20_000_000);
+    }
+
+    // ── 경험치 분배 ─────────────────────────────────────────────────────
+
+    #[test]
+    fn 파티가_없으면_나눌_것도_없다() {
+        // 빈 자리 목록은 "파티에 속하지 않았다" 는 뜻이다. 부르는 쪽이 이것을
+        // 보고 기존 단독 지급으로 간다.
+        assert!(split_xp(100, 50, &[]).is_empty());
+    }
+
+    #[test]
+    fn 곁에_아무도_없으면_혼자_잡은_것과_같다() {
+        // 파티에 속했다는 이유만으로 혼자 하는 사냥이 달라지면 안 된다.
+        // 인원 보너스도 붙지 않는다 — 함께한 사람이 없으므로.
+        assert_eq!(split_xp(100, 50, &[owner(1, 50)]), vec![(1, 100)]);
+    }
+
+    #[test]
+    fn 둘이_나누면_각자_절반에_보너스가_붙는다() {
+        // 총량 100 → 110(한 명 더 있으므로 +10%), 균등하게 55 씩.
+        let shares = split_xp(100, 50, &[owner(1, 50), seat(2, 50)]);
+        assert_eq!(shares, vec![(1, 55), (2, 55)]);
+    }
+
+    #[test]
+    fn 열둘이_붙어_있으면_총량이_두배가_넘는다() {
+        // 인원이 늘수록 한 번의 킬에서 받는 몫은 줄지만, 킬 자체가 인원수만큼
+        // 자주 일어나므로 시간당으로는 이쪽이 빠르다. 그것이 파티를 맺을 이유다.
+        let mut seats = vec![owner(1, 50)];
+        for id in 2..=12 {
+            seats.push(seat(id, 50));
+        }
+        let shares = split_xp(100, 50, &seats);
+        let total: u32 = shares.iter().map(|(_, xp)| *xp).sum();
+        assert_eq!(total, 210, "100 × (1 + 0.1 × 11) = 210");
+        assert_eq!(shares.len(), 12);
+    }
+
+    #[test]
+    fn 나머지는_잡은_사람이_가져간다() {
+        // 111 을 둘로 나누면 55 씩에 1 이 남는다. 흩뿌리지 않고 선점자에게 준다 —
+        // 명분이 분명하고, 누구에게 갈지 정하려고 다시 정렬할 필요도 없다.
+        let shares = split_xp(101, 50, &[owner(1, 50), seat(2, 50)]);
+        assert_eq!(shares, vec![(1, 56), (2, 55)]);
+    }
+
+    #[test]
+    fn 훑는_순서가_달라도_같은_몫이_나온다() {
+        let forward = split_xp(101, 50, &[owner(1, 50), seat(2, 50), seat(3, 50)]);
+        let backward = split_xp(101, 50, &[seat(3, 50), seat(2, 50), owner(1, 50)]);
+
+        let mut a = forward.clone();
+        let mut b = backward.clone();
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(a, b, "표를 훑는 순서가 답을 바꾸면 안 된다");
+    }
+
+    // ── 레벨 격차 ───────────────────────────────────────────────────────
+
+    #[test]
+    fn 열_레벨_차이까지는_온전히_받는다() {
+        assert_eq!(xp_gap_percent(50, 50), 100);
+        assert_eq!(xp_gap_percent(40, 50), 100);
+        assert_eq!(xp_gap_percent(60, 50), 100);
+    }
+
+    #[test]
+    fn 격차가_벌어질수록_계단으로_줄어든다() {
+        assert_eq!(xp_gap_percent(39, 50), 50);
+        assert_eq!(xp_gap_percent(30, 50), 50);
+        assert_eq!(xp_gap_percent(29, 50), 25);
+        assert_eq!(xp_gap_percent(20, 50), 25);
+        assert_eq!(xp_gap_percent(19, 50), 0);
+    }
+
+    #[test]
+    fn 격차는_양쪽_모두_깎는다() {
+        // 끌어올리기(저렙이 고렙 몹에 붙는 것)와 쓸어 담기(고렙이 저렙 사냥터에
+        // 눌러앉는 것)를 한 규칙으로 막는다.
+        assert_eq!(xp_gap_percent(10, 50), xp_gap_percent(90, 50));
+    }
+
+    #[test]
+    fn 갓_시작한_사람은_만렙_사냥터에서_아무것도_받지_못한다() {
+        // 파티 분배를 도입하는 순간 생기는 구멍이다. 막지 않으면 성장이
+        // "아는 고렙이 있는가" 하나로 결정된다.
+        let shares = split_xp(1000, 200, &[owner(1, 200), seat(2, 1)]);
+        assert_eq!(shares, vec![(1, 1000)], "자격자가 하나뿐이라 단독과 같다");
+    }
+
+    #[test]
+    fn 깎인_몫은_남에게_가지_않는다() {
+        // 재분배하면 자격 없는 사람을 데려오는 것이 남은 사람에게 이득이 되어,
+        // 계수가 막으려던 일을 오히려 부추긴다.
+        let shares = split_xp(100, 50, &[owner(1, 50), seat(2, 50), seat(3, 25)]);
+        // 총량 120, 셋으로 나눠 40 씩. 3 번은 격차 25 → 10.
+        assert_eq!(shares, vec![(1, 40), (2, 40), (3, 10)]);
+        let total: u32 = shares.iter().map(|(_, xp)| *xp).sum();
+        assert!(total < 120, "깎인 30 은 사라진다");
+    }
+
+    #[test]
+    fn 잡은_사람은_격차로_깎이지_않는다() {
+        // 직접 때려서 잡은 사람은 그 몹을 감당할 수 있다는 것을 증명했다.
+        // 이 계수가 막으려는 것은 증명하지 않은 몫이다.
+        let shares = split_xp(100, 200, &[owner(1, 1), seat(2, 200)]);
+        assert_eq!(shares, vec![(1, 55), (2, 55)]);
+    }
+
+    #[test]
+    fn 아무도_자격이_없으면_잡은_사람이_전액을_받는다() {
+        // 파티에 들었다는 이유로 자기가 잡은 몹의 경험치를 잃는 일은 없다.
+        let shares = split_xp(100, 200, &[owner(1, 5), seat(2, 5), seat(3, 5)]);
+        assert_eq!(shares, vec![(1, 100)]);
+    }
+
+    #[test]
+    fn 나눌_거리는_부르는_거리와_같다() {
+        // 한 번에 부를 수 있는 사람과 함께 사냥한 것으로 치는 사람이 다르면
+        // "불렀는데 왜 안 나뉘지" 가 된다.
+        assert_eq!(XP_SHARE_RANGE_TILES, NEARBY_INVITE_RANGE_TILES);
+    }
+
+    #[test]
+    fn 가장_작은_몹도_열둘이_나눌_수_있다() {
+        // 레벨 1 정찰기가 8. 정수 나눗셈에서 0 이 되면 "받았는데 안 오른다" 가
+        // 된다. 몫이 0 인 사람은 결과에서 빠지므로 그 자리는 조용히 사라진다.
+        let mut seats = vec![owner(1, 1)];
+        for id in 2..=12 {
+            seats.push(seat(id, 1));
+        }
+        let shares = split_xp(8, 1, &seats);
+        assert_eq!(shares.len(), 12, "총량 16 을 열둘이 나눠도 모두 1 이상이다");
+        assert_eq!(shares[0].1, 5, "1 씩 열둘, 남은 4 는 잡은 사람에게");
     }
 }

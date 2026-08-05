@@ -699,7 +699,9 @@ class PartyInviteCard extends PositionComponent
 
     final name = invite.fromName.isEmpty ? '어느 요원' : invite.fromName;
     _title.render(canvas, '$name 님의 파티 초대', Vector2(12, 12));
-    _muted.render(canvas, '경험치는 각자 몫이다', Vector2(12, 30));
+    // 초대를 받은 사람이 가장 알고 싶은 것은 "들어가면 무엇이 달라지나" 다.
+    // 파티의 값어치가 곧 이 한 줄이므로 여기에 둔다.
+    _muted.render(canvas, '30m 안에서 함께 잡으면 경험치를 나눈다', Vector2(12, 30));
 
     const labels = ['수락', '거절'];
     final width = (size.x - 24 - 8) / 2;
