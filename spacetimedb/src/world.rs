@@ -264,7 +264,14 @@ const TELEPORT_COOLDOWN_MICROS: i64 = 8_000_000;
 ///
 /// 로그인했다고 여기 행이 생기는 것이 아니라 [`enter_world`] 를 불러야 생긴다.
 /// 캐릭터 선택 화면에 머무는 동안에는 월드에 없는 것이 맞다.
-#[spacetimedb::table(accessor = world_player, public)]
+#[spacetimedb::table(
+    accessor = world_player,
+    public,
+    // 관심 영역 구독의 뼈대다. 클라이언트가 자기 청크와 이웃 여덟 칸을 등식으로
+    // 나열해 구독하므로([`PLAYER_SUB_CHUNK_TILES`]), 이 인덱스가 없으면 그 구독이
+    // 전수 검사가 된다. **인덱스를 지우면 구독이 런타임 오류로 깨진다.**
+    index(accessor = by_sub_chunk, btree(columns = [sub_chunk]))
+)]
 pub struct WorldPlayer {
     /// 접속 주체. 한 연결은 한 캐릭터만 조종한다.
     #[primary_key]
@@ -356,6 +363,57 @@ pub struct WorldPlayer {
     /// (클라이언트 `RestRecovery.warmupAfterDamage` 와 같은 규칙).
     #[default(Timestamp::UNIX_EPOCH)]
     pub last_damaged_at: Timestamp,
+
+    /// 마지막으로 공격을 **휘두른** 시각.
+    ///
+    /// 다른 사람 화면에서 이 몸이 공격 동작을 하려면, 공격이 일어났다는 사실
+    /// 자체가 표에 남아야 한다. [`next_attack_at`](WorldPlayer::next_attack_at) 으로
+    /// 역산할 수도 있을 것 같지만 그것은 쿨다운의 끝이고 스킬마다 길이가 달라,
+    /// 언제 휘둘렀는지를 되짚을 수 없다.
+    ///
+    /// 사건을 상태로 전달하는 방식이다([`deaths`](WorldPlayer::deaths) 와 같은
+    /// 이유) — 이 값이 **바뀌는 것**을 보고 동작을 한 번 재생한다. 별도 이벤트
+    /// 표와 달리 재구독해도 옛 공격이 되살아나지 않는다.
+    #[default(Timestamp::UNIX_EPOCH)]
+    pub last_attack_at: Timestamp,
+
+    /// 그 공격이 향한 방향(정규화된 그리드 벡터).
+    ///
+    /// **서버가 계산한다.** 클라이언트가 보내면 조작할 수 있는 값이 되고, 어차피
+    /// 서버는 사거리를 재느라 양쪽 좌표를 이미 쥐고 있다.
+    #[default(0.0f32)]
+    pub attack_dir_x: f32,
+
+    #[default(0.0f32)]
+    pub attack_dir_y: f32,
+
+    /// 무엇으로 쳤는지. [`ATTACK_SKILL_NONE`] 이면 기본 공격이다.
+    ///
+    /// 스킬마다 동작과 이펙트가 다르므로, 이것이 없으면 남의 화면에서는 모든
+    /// 공격이 같은 주먹질로 보인다.
+    ///
+    /// 문자열이 아니라 번호인 것은 스키마 기본값 때문이다 — `String` 은 상수
+    /// 문맥에서 만들 수 없어 `#[default(...)]` 를 붙일 수 없고, 기본값 없는 열은
+    /// 이미 배포된 표에 더할 수 없다.
+    #[default(0u32)]
+    pub attack_skill: u32,
+
+    /// 관심 영역 구독용 공간 청크. `player_sub_chunk_of(grid_x, grid_y)` 로 만든다.
+    ///
+    /// **지금 좌표로 정한다.** 몹의 [`chunk`](Monster::chunk) 가 집 좌표인 것과
+    /// 반대다 — 구독은 "지금 화면에 보여야 할 것" 을 고르는 일이므로 현재 위치가
+    /// 기준이어야 한다.
+    ///
+    /// **좌표를 쓰는 모든 곳에서 함께 갱신해야 한다.** 하나라도 빠뜨리면 그 사람은
+    /// 옛 청크에 남아, 본인 화면에서는 주변이 비고 남들 화면에는 유령이 남는다.
+    /// 특히 사망 재가동([`apply_damage_to_player`])은 좌표를 월드 중심으로 되돌리
+    /// 므로 놓치기 쉽다.
+    ///
+    /// 맨 끝에 있고 기본값이 있어야 한다([`next_teleport_at`](WorldPlayer::next_teleport_at)
+    /// 과 같은 이유). 기본값 0 은 좌상단 청크라 실제 위치와 어긋나지만, 다음
+    /// 좌표 보고 한 번이면 제 값을 얻는다.
+    #[default(0u32)]
+    pub sub_chunk: u32,
 }
 
 /// 월드에 상주하는 몬스터 한 마리.
@@ -372,7 +430,11 @@ pub struct WorldPlayer {
     //
     // 좌표(`f32`)에는 범위 인덱스를 걸 수 없어 정수 청크 번호를 따로 둔다.
     // 플레이어가 선 청크와 그 이웃만 조회하면 훑는 수가 수십 기로 줄어든다.
-    index(accessor = by_chunk, btree(columns = [chunk]))
+    index(accessor = by_chunk, btree(columns = [chunk])),
+    // 구독은 집이 아니라 **지금 있는 자리**로 골라야 한다. 집 청크로 3×3 을
+    // 조회하면 확실히 잡히는 것은 반경 32 − MONSTER_MAX_ROAM_TILES(26) = 6 타일
+    // 안의 몹뿐이라, 화면 구석의 몹이 아예 오지 않는다.
+    index(accessor = by_pos_chunk, btree(columns = [pos_chunk]))
 )]
 pub struct Monster {
     #[primary_key]
@@ -421,6 +483,25 @@ pub struct Monster {
     /// 자동 마이그레이션의 조건이다. 기본값 행은 다음 재배치에서 제 값을 얻는다.
     #[default(0u32)]
     pub chunk: u32,
+
+    /// 구독용 공간 청크. `chunk_of(grid_x, grid_y)` — **지금 있는 자리** 기준이다.
+    ///
+    /// [`chunk`](Monster::chunk) 와 격자는 같지만([`CHUNK_TILES`]) 기준점이 다르다.
+    /// 집 청크는 AI 가 후보를 모을 때 쓰고(집에서 벗어나는 거리가 제한적이라 그쪽은
+    /// 그것으로 충분하다), 이쪽은 클라이언트가 화면에 그릴 것을 고를 때 쓴다.
+    ///
+    /// 격자를 새로 만들지 않고 32 를 그대로 쓰는 이유는 두 가지다. 첫째,
+    /// **몬스터는 면적으로 마릿수를 자를 수 없다** — 레벨이 반지름에 선형으로
+    /// 배치되어([`cluster_center`]) 밀도가 중심 쪽에서 열 배 넘게 높아지므로,
+    /// 어떤 청크 크기를 골라도 평균만 맞고 실제 마릿수는 크게 흔들린다. 마릿수
+    /// 상한은 클라이언트가 거리순으로 잘라 만든다. 둘째, 남는 기준은 **화면을
+    /// 덮는가** 인데 3×3 의 보장 반경이 곧 한 변이라 32 면 최대 축소 화면도 덮는다.
+    /// [`Loot`] 도 같은 격자를 쓰므로 클라이언트가 청크 번호를 한 번만 계산해
+    /// 두 구독에 함께 쓸 수 있다.
+    ///
+    /// 맨 끝에 있고 기본값이 있어야 한다([`chunk`](Monster::chunk) 와 같은 이유).
+    #[default(0u32)]
+    pub pos_chunk: u32,
 }
 
 /// 바닥에 떨어진 전리품 하나.
@@ -730,6 +811,38 @@ pub fn chunk_of(x: f32, y: f32) -> u32 {
     cy * CHUNKS_PER_ROW + cx
 }
 
+/// 플레이어 구독용 청크 한 변(타일).
+///
+/// **[`CHUNK_TILES`] 와 목적이 다르다.** 32 는 어그로 거리(9~16)에 맞춰 AI 가
+/// 훑을 범위를 좁히는 값이고, 이 값은 **한 사람의 관심 영역에 들어올 인원**에서
+/// 역산한 값이다. 구독 SQL 에는 `LIMIT` 도 거리 정렬도 없어 "가까운 50 명" 을
+/// 쿼리로 표현할 수 없으므로, 인원은 면적으로 근사할 수밖에 없다.
+///
+/// ```text
+/// 동접 1,000 명이 걸을 수 있는 1,000 × 1,000 타일에 고르게 퍼졌을 때
+///   밀도 = 1,000 / 1,000,000 = 0.001 명/타일²
+///   3×3 청크에 50 명  →  9C² × 0.001 = 50  →  C = 74.5
+///   검산 C=74 → 9 × 74² × 0.001 = 49.3 명
+/// ```
+///
+/// 이것은 **평균이지 상한이 아니다.** 안전지대처럼 사람이 몰리는 곳에서는 그대로
+/// 인원수만큼 온다. 실제 "50 명" 은 클라이언트가 거리순으로 잘라 만든다
+/// (`ActionRpgGame._maxRemotePlayers`).
+pub const PLAYER_SUB_CHUNK_TILES: f32 = 74.0;
+
+/// 한 줄에 들어가는 플레이어 구독 청크 수.
+pub const PLAYER_SUB_CHUNKS_PER_ROW: u32 = (WORLD_TILES / PLAYER_SUB_CHUNK_TILES) as u32 + 1;
+
+/// 좌표가 속한 플레이어 구독 청크 번호.
+///
+/// 클라이언트 `kPlayerSubChunkTiles` 와 같은 식이어야 한다 — 어긋나면 서로를
+/// 영영 보지 못한다.
+pub fn player_sub_chunk_of(x: f32, y: f32) -> u32 {
+    let cx = (x / PLAYER_SUB_CHUNK_TILES).max(0.0) as u32;
+    let cy = (y / PLAYER_SUB_CHUNK_TILES).max(0.0) as u32;
+    cy * PLAYER_SUB_CHUNKS_PER_ROW + cx
+}
+
 /// 안전지대 안인가.
 ///
 /// 클라이언트 [`SafeZone`] 과 같은 축 정렬 사각형 판정이다. 몹은 여기에 발을
@@ -798,6 +911,8 @@ pub fn bootstrap(ctx: &ReducerContext) {
                     grid_x: x,
                     grid_y: y,
                     chunk: chunk_of(x, y),
+                    // 갓 배치된 몹은 집에 서 있으므로 두 청크가 같은 값에서 출발한다.
+                    pos_chunk: chunk_of(x, y),
                     hp: max_hp,
                     max_hp,
                     alive: true,
@@ -1080,6 +1195,13 @@ pub fn enter_world(ctx: &ReducerContext, grid_x: f32, grid_y: f32) -> Result<(),
         invulnerable_until: ctx.timestamp
             + TimeDuration::from_micros(RESPAWN_INVULNERABLE_MICROS),
         last_damaged_at: Timestamp::UNIX_EPOCH,
+        sub_chunk: player_sub_chunk_of(spawn_x, spawn_y),
+        // 아직 아무것도 휘두르지 않았다. epoch 로 두면 클라이언트가 "값이
+        // 바뀌었다" 로 오인해 입장하자마자 헛손질을 그리는 일이 없다.
+        last_attack_at: Timestamp::UNIX_EPOCH,
+        attack_dir_x: 0.0,
+        attack_dir_y: 0.0,
+        attack_skill: ATTACK_SKILL_NONE,
     };
 
     match ctx.db.world_player().identity().find(ctx.sender()) {
@@ -1140,6 +1262,7 @@ pub fn move_to(ctx: &ReducerContext, grid_x: f32, grid_y: f32) -> Result<(), Str
     ctx.db.world_player().identity().update(WorldPlayer {
         grid_x: next_x,
         grid_y: next_y,
+        sub_chunk: player_sub_chunk_of(next_x, next_y),
         last_move_at: ctx.timestamp,
         ..me
     });
@@ -1211,6 +1334,7 @@ pub fn teleport_to(
     ctx.db.world_player().identity().update(WorldPlayer {
         grid_x,
         grid_y,
+        sub_chunk: player_sub_chunk_of(grid_x, grid_y),
         // 도착 직후의 이동 보고가 "방금 470 타일을 뛰었다" 로 읽히지 않도록
         // 기준 시각을 함께 민다. 이걸 빼먹으면 텔레포트 다음 한 번의 `move_to`
         // 가 상한에 걸려 잘린다.
@@ -1295,8 +1419,15 @@ pub fn attack_monster(ctx: &ReducerContext, monster_id: u64) -> Result<(), Strin
     let (mx, my) = (monster.grid_x, monster.grid_y);
     ctx.db.monster().id().update(monster);
 
+    // 휘두른 사실과 방향을 남긴다. 이것이 없으면 다른 사람 화면에서 나는
+    // 가만히 서 있는 채로 몹만 죽어 나간다.
+    let (adx, ady) = unit_toward(me.grid_x, me.grid_y, mx, my);
     ctx.db.world_player().identity().update(WorldPlayer {
         next_attack_at: ctx.timestamp + TimeDuration::from_micros(ATTACK_COOLDOWN_MICROS),
+        last_attack_at: ctx.timestamp,
+        attack_dir_x: adx,
+        attack_dir_y: ady,
+        attack_skill: ATTACK_SKILL_NONE,
         ..me
     });
 
@@ -1340,6 +1471,22 @@ fn skill_spec(skill_id: &str) -> Option<SkillSpec> {
     match skill_id.trim().to_lowercase().as_str() {
         "plasma" => Some(SKILL_PLASMA),
         _ => None,
+    }
+}
+
+/// 기본 공격. 스킬을 쓰지 않았다는 뜻이다.
+pub const ATTACK_SKILL_NONE: u32 = 0;
+
+/// 플라즈마 스킬([`SKILL_PLASMA`]).
+pub const ATTACK_SKILL_PLASMA: u32 = 1;
+
+/// 스킬 id 를 [`WorldPlayer::attack_skill`] 에 담을 번호로 바꾼다.
+///
+/// 클라이언트도 같은 대응을 알고 있어야 한다(`lib/game/net/world_presence.dart`).
+fn attack_skill_code(skill_id: &str) -> u32 {
+    match skill_id.trim().to_lowercase().as_str() {
+        "plasma" => ATTACK_SKILL_PLASMA,
+        _ => ATTACK_SKILL_NONE,
     }
 }
 
@@ -1420,9 +1567,16 @@ pub fn cast_skill(
     let (mx, my) = (monster.grid_x, monster.grid_y);
     ctx.db.monster().id().update(monster);
 
+    let (adx, ady) = unit_toward(me.grid_x, me.grid_y, mx, my);
     ctx.db.world_player().identity().update(WorldPlayer {
         mp: me.mp - spec.mp_cost,
         next_attack_at: ctx.timestamp + TimeDuration::from_micros(spec.cooldown_micros),
+        last_attack_at: ctx.timestamp,
+        attack_dir_x: adx,
+        attack_dir_y: ady,
+        // 무엇으로 쳤는지 남긴다. 스킬마다 동작이 달라, 이것이 없으면 남의
+        // 화면에서는 모든 공격이 같은 주먹질로 보인다.
+        attack_skill: attack_skill_code(&skill_id),
         ..me
     });
 
@@ -1472,11 +1626,16 @@ pub fn attack_player(ctx: &ReducerContext, target_character_id: u64) -> Result<(
         return Err("사거리 밖이다.".to_string());
     }
 
+    let (adx, ady) = unit_toward(me.grid_x, me.grid_y, target.grid_x, target.grid_y);
     let updated = apply_damage_to_player(ctx, target, player_damage(me.level), false, false);
     ctx.db.world_player().identity().update(updated);
 
     ctx.db.world_player().identity().update(WorldPlayer {
         next_attack_at: ctx.timestamp + TimeDuration::from_micros(ATTACK_COOLDOWN_MICROS),
+        last_attack_at: ctx.timestamp,
+        attack_dir_x: adx,
+        attack_dir_y: ady,
+        attack_skill: ATTACK_SKILL_NONE,
         ..me
     });
 
@@ -1573,12 +1732,15 @@ pub fn monster_ai(ctx: &ReducerContext, _timer: MonsterAiTimer) {
                     monster.home_y,
                     step,
                 );
-                ctx.db.monster().id().update(Monster {
-                    grid_x: nx,
-                    grid_y: ny,
-                    ..monster
-                });
-                moved += 1;
+                if moved_enough(nx, ny, &monster) {
+                    ctx.db.monster().id().update(Monster {
+                        grid_x: nx,
+                        grid_y: ny,
+                        pos_chunk: chunk_of(nx, ny),
+                        ..monster
+                    });
+                    moved += 1;
+                }
             }
             continue;
         }
@@ -1602,12 +1764,15 @@ pub fn monster_ai(ctx: &ReducerContext, _timer: MonsterAiTimer) {
                 player.grid_y,
                 step,
             );
-            ctx.db.monster().id().update(Monster {
-                grid_x: nx,
-                grid_y: ny,
-                ..monster
-            });
-            moved += 1;
+            if moved_enough(nx, ny, &monster) {
+                ctx.db.monster().id().update(Monster {
+                    grid_x: nx,
+                    grid_y: ny,
+                    pos_chunk: chunk_of(nx, ny),
+                    ..monster
+                });
+                moved += 1;
+            }
             continue;
         }
 
@@ -1759,6 +1924,35 @@ pub fn pick_loot(ctx: &ReducerContext, loot_id: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// 새 좌표가 표에 쓸 만큼 움직였는가.
+///
+/// **변화 없는 `update` 는 그 행을 구독한 모두에게 델타를 만든다.** 몹은 3.33Hz 로
+/// 판정하므로, 목표에 이미 도착한 몹을 매 틱 다시 쓰면 아무 일도 일어나지 않는데
+/// 초당 세 번씩 전원에게 좌표가 밀려간다. [`regen_tick`] 이 만피·만마인 사람을
+/// 건너뛰는 것과 같은 원칙이다.
+///
+/// 기준은 0.01 타일 — 화면에서 보이지 않는 크기이며,
+/// [`step_toward`] 가 목표를 지나치지 않으므로 도착 후에는 정확히 0 이 된다.
+fn moved_enough(nx: f32, ny: f32, monster: &Monster) -> bool {
+    dist_sq(nx, ny, monster.grid_x, monster.grid_y) > 0.0001
+}
+
+/// `(fx, fy)` 에서 `(tx, ty)` 를 향하는 단위 벡터. 겹쳐 있으면 `(0, 0)`.
+///
+/// 공격 방향을 남의 화면에 전하는 데 쓴다. 각도가 아니라 벡터로 두는 것은
+/// 삼각함수를 서버에서 돌리지 않기 위해서다 — 받는 쪽이 필요하면 각도로
+/// 바꾸면 되고, 그리기용 값이라 미세한 차이는 문제되지 않는다.
+fn unit_toward(fx: f32, fy: f32, tx: f32, ty: f32) -> (f32, f32) {
+    let dx = tx - fx;
+    let dy = ty - fy;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 0.0001 {
+        (0.0, 0.0)
+    } else {
+        (dx / len, dy / len)
+    }
+}
+
 /// `(fx, fy)` 에서 `(tx, ty)` 쪽으로 `step` 만큼 나아간 좌표.
 ///
 /// 목표를 지나치지 않는다 — 지나치면 목표 주위에서 떨리게 된다.
@@ -1864,6 +2058,8 @@ pub fn monster_tick(ctx: &ReducerContext, _timer: MonsterTickTimer) {
         ctx.db.monster().id().update(Monster {
             grid_x: monster.home_x,
             grid_y: monster.home_y,
+            // 집으로 돌아왔으니 구독 청크도 집 청크와 같아진다.
+            pos_chunk: chunk_of(monster.home_x, monster.home_y),
             hp: max_hp,
             max_hp,
             alive: true,
@@ -1956,6 +2152,11 @@ fn apply_damage_to_player(
         alive: true,
         grid_x: cx,
         grid_y: cy,
+        // **재가동은 좌표가 바뀌는 네 곳 중 가장 놓치기 쉬운 자리다.** 여기서
+        // 구독 청크를 함께 밀지 않으면, 쓰러진 사람은 안전지대에 서 있는데 구독
+        // 상으로는 죽은 사냥터에 남는다 — 본인 화면에서는 주변이 통째로 비고,
+        // 남들 화면에서는 유령이 사냥터에 남는다.
+        sub_chunk: player_sub_chunk_of(cx, cy),
         // 재가동은 월드를 가로지르는 이동이다. 기준 시각을 함께 밀지 않으면
         // 다음 좌표 보고가 "방금 500 타일을 뛰었다" 로 읽혀 속도 상한에 잘린다.
         last_move_at: ctx.timestamp,
@@ -2056,6 +2257,84 @@ mod tests {
         assert_eq!(normalize_build("drone"), Ok("drone".into()));
         assert_eq!(normalize_build(" Sovereign "), Ok("sovereign".into()));
         assert!(normalize_build("robot_overlord").is_err());
+    }
+
+    // ── 관심 영역 구독 격자 ─────────────────────────────────────────────
+    //
+    // 이 값들은 **클라이언트와 글자 단위로 맞아야 한다**
+    // (`lib/spacetime/cyborg_connection.dart` 의 `kPlayerSubChunkTiles` 등).
+    // 어긋나면 서로 다른 격자를 가리켜 아무도 서로를 보지 못하는데, 오류가 나지
+    // 않고 그냥 "빈 월드" 로 보이기 때문에 눈으로는 원인을 찾기 어렵다.
+
+    #[test]
+    fn 플레이어_구독_청크는_사람_오십_명에서_역산한_크기다() {
+        // 동접 1,000 명이 걸을 수 있는 1,000 × 1,000 타일에 고르게 퍼졌을 때
+        //   9C² × (1,000 / 1,000,000) = 50  →  C ≈ 74.5
+        let density = 1_000.0 / (WORLD_PLAYABLE_TILES * WORLD_PLAYABLE_TILES);
+        let in_view = 9.0 * PLAYER_SUB_CHUNK_TILES * PLAYER_SUB_CHUNK_TILES * density;
+        assert!(
+            (in_view - 50.0).abs() < 1.0,
+            "3×3 에 들어오는 인원이 {in_view} 명이다. 50 명에서 역산한 값이어야 한다."
+        );
+    }
+
+    #[test]
+    fn 같은_청크_안의_두_좌표는_같은_번호를_받는다() {
+        // 이것이 성립해야 재구독이 청크 단위로만 일어난다. 좌표마다 달라지면
+        // 한 발짝 걸을 때마다 다시 구독하게 된다.
+        let a = player_sub_chunk_of(300.0, 300.0);
+        let b = player_sub_chunk_of(300.0 + PLAYER_SUB_CHUNK_TILES - 1.0, 300.0);
+        let same_column = (300.0 / PLAYER_SUB_CHUNK_TILES) as u32
+            == ((300.0 + PLAYER_SUB_CHUNK_TILES - 1.0) / PLAYER_SUB_CHUNK_TILES) as u32;
+        if same_column {
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn 청크_번호는_월드_안에서_유일하다() {
+        // 행 번호 × 한 줄 청크 수 + 열 번호. 한 줄 수가 실제보다 작으면 서로 다른
+        // 자리가 같은 번호를 받아, 월드 반대편 사람이 화면에 나타난다.
+        let mut seen = std::collections::HashSet::new();
+        let mut tile = 0.0f32;
+        while tile < WORLD_TILES {
+            let mut other = 0.0f32;
+            while other < WORLD_TILES {
+                assert!(
+                    seen.insert(player_sub_chunk_of(tile, other)),
+                    "({tile}, {other}) 의 청크 번호가 앞선 것과 겹친다"
+                );
+                other += PLAYER_SUB_CHUNK_TILES;
+            }
+            tile += PLAYER_SUB_CHUNK_TILES;
+        }
+    }
+
+    #[test]
+    fn 몬스터_구독_청크는_화면을_덮는다() {
+        // 몹은 밀도가 자리마다 열 배 넘게 달라 면적으로 마릿수를 자를 수 없다.
+        // 그래서 기준은 인원이 아니라 **3×3 이 화면을 덮는가** 다. 3×3 의 보장
+        // 반경은 한 변과 같고, 최대 축소 시 화면 AABB 반폭은 약 22.4 타일이다.
+        assert!(
+            CHUNK_TILES >= 23.0,
+            "구독 청크가 {CHUNK_TILES} 타일이면 최대 축소 화면의 구석이 구독 밖으로 나간다"
+        );
+    }
+
+    #[test]
+    fn 몹의_집_청크는_구독에_쓸_수_없다() {
+        // 집 청크로 3×3 을 조회하면 확실히 잡히는 것은
+        //   한 변 − 최대 배회 거리 = 32 − 26 = 6 타일
+        // 안의 몹뿐이다. 화면 반폭(11~22 타일)보다 작으므로 구독용으로는
+        // `pos_chunk`(현재 좌표) 를 따로 두어야 한다. 이 테스트는 그 전제가
+        // 무너지는 것을 알린다 — 배회 거리를 줄여 6 이 화면을 덮게 되면
+        // 컬럼 하나를 없앨 수 있다.
+        let guaranteed = CHUNK_TILES - MONSTER_MAX_ROAM_TILES;
+        assert!(
+            guaranteed < 11.0,
+            "보장 반경이 {guaranteed} 타일이면 집 청크만으로 구독할 수 있다. \
+             pos_chunk 를 없앨 수 있는지 다시 보라."
+        );
     }
 
     // ── 전투 수치의 단일 진실 공급원 ────────────────────────────────────

@@ -49,6 +49,30 @@ class RemotePlayerEntity extends IsoEntity {
   /// 실제로 움직이고 있는지. 다리 애니메이션을 켤지 정한다.
   bool _moving = false;
 
+  // ── 공격 동작 ───────────────────────────────────────────────────────
+
+  /// 마지막으로 **재생한** 공격의 서버 시각(마이크로초).
+  ///
+  /// 서버 시각을 지금 시각과 견주지 않는다. 기기 시계는 서버와 몇 초씩 어긋나
+  /// 있어서, 절대 비교로 거르면 모든 공격이 "너무 오래된 것" 이 되거나 매
+  /// 프레임 다시 재생된다. **값이 바뀌었는가**만 본다.
+  int _playedAttackAt = 0;
+
+  /// 남은 공격 동작 시간(초). 0 보다 크면 휘두르는 중이다.
+  double _swingTimer = 0;
+
+  /// 이번 공격이 무엇이었는지. 스킬마다 다르게 그린다.
+  int _swingSkill = AttackSkill.none;
+
+  /// 공격 동작 한 번의 길이(초).
+  ///
+  /// 서버 기본 공격 쿨다운(0.35초)보다 짧게 잡는다. 길면 연타할 때 동작이
+  /// 끊기지 않고 이어져, 언제 한 대가 들어갔는지 눈으로 셀 수 없다.
+  static const double _swingDuration = 0.26;
+
+  /// 지금 휘두르는 중인지. 무기를 꺼내 보일지 정한다.
+  bool get isSwinging => _swingTimer > 0;
+
   /// 서버 외형 문자열을 신체 프레임으로 옮긴다.
   ///
   /// 모르는 값이 와도 칸이 비지 않도록 기본 프레임으로 떨어뜨린다 — 서버에
@@ -84,6 +108,24 @@ class RemotePlayerEntity extends IsoEntity {
     level = snapshot.level;
     alive = snapshot.alive;
 
+    // 공격은 **사건**이다. 시각이 바뀐 것을 보고 한 번만 재생한다.
+    //
+    // 첫 스냅샷에서 재생하지 않도록 `_playedAttackAt` 이 0 인 동안은 기록만
+    // 한다. 그러지 않으면 시야에 들어오는 모든 사람이 등장하자마자 허공에
+    // 한 번씩 칼을 휘두른다.
+    final attackAt = snapshot.lastAttackAtMicros;
+    if (attackAt != _playedAttackAt) {
+      if (_playedAttackAt != 0 && attackAt != 0) {
+        _swingTimer = _swingDuration;
+        _swingSkill = snapshot.attackSkill;
+        // 휘두른 방향으로 몸을 돌린다. 등 뒤를 보고 치는 모습이 되면 누구를
+        // 노렸는지 알 수 없다.
+        final dir = snapshot.attackDir;
+        if (dir.length2 > 0.0001) _renderYaw = _yawFor(dir);
+      }
+      _playedAttackAt = attackAt;
+    }
+
     final ratio = snapshot.hpRatio;
     // 값이 움직인 동안만 바를 띄운다. 다치는 쪽뿐 아니라 차오르는 쪽도 보여
     // 준다 — 회복하는 상대를 지금 칠지 기다릴지가 PK 의 판단거리다.
@@ -95,6 +137,7 @@ class RemotePlayerEntity extends IsoEntity {
   void update(double dt) {
     _animTime += dt;
     if (_healthBarTimer > 0) _healthBarTimer -= dt;
+    if (_swingTimer > 0) _swingTimer = math.max(0, _swingTimer - dt);
 
     final delta = _target - grid;
     final distance = delta.length;
@@ -118,6 +161,53 @@ class RemotePlayerEntity extends IsoEntity {
     super.update(dt);
   }
 
+  /// 공격 동작의 팔 각도.
+  ///
+  /// 뒤로 당겼다가 앞으로 내치는 두 박자다. 앞으로만 뻗으면 미는 동작처럼
+  /// 보여서, 멀리서 보면 공격인지 알아채기 어렵다.
+  double _attackArmSwing(double progress) {
+    // 앞 30%는 뒤로 당기고(윈드업), 나머지는 앞으로 내친다.
+    if (progress < 0.3) return 14 * (progress / 0.3);
+    final strike = (progress - 0.3) / 0.7;
+    return 14 - 40 * Curves.easeOutCubic.transform(strike);
+  }
+
+  /// 휘두르는 궤적. 몸 앞으로 지나가는 빛의 호다.
+  ///
+  /// 팔 각도만으로는 작은 화면에서 눈에 띄지 않는다. **PK 가 허용되는
+  /// 월드**라 누가 누구를 치고 있는지는 멀리서도 읽혀야 한다.
+  void _renderSwingArc(Canvas canvas, double progress) {
+    // 내치는 구간에서만 그린다. 윈드업까지 빛나면 언제 맞았는지 흐려진다.
+    if (progress < 0.3) return;
+    final strike = (progress - 0.3) / 0.7;
+    final fade = (1 - strike).clamp(0.0, 1.0);
+
+    // 화면 기준으로 바라보는 쪽. 몸의 좌우 반전과 같은 규칙을 쓴다.
+    final facingRight = math.cos(_renderYaw) >= 0;
+    final sweep = math.pi * 0.9;
+    final start = (facingRight ? -sweep / 2 : math.pi - sweep / 2) +
+        sweep * strike * 0.6;
+
+    canvas.drawArc(
+      Rect.fromCenter(
+        center: const Offset(0, -26),
+        width: 74,
+        height: 52,
+      ),
+      start,
+      sweep * 0.55,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 4.5 * fade + 1
+        ..color = (_swingSkill == AttackSkill.plasma
+                ? GamePalette.bladeGlow
+                : GamePalette.remotePlayer)
+            .withValues(alpha: 0.75 * fade),
+    );
+  }
+
   /// 그리드 방향을 화면 기준 각도로 바꾼다.
   double _yawFor(Vector2 gridDir) {
     final screen = gridDirToScreenDir(gridDir.normalized());
@@ -137,19 +227,25 @@ class RemotePlayerEntity extends IsoEntity {
         ? math.sin(cycle * 2) * 2.0 * design.bobScale
         : math.sin(_animTime * 2) * 1.2;
 
+    // 휘두르는 중이면 걷기 대신 공격 동작이 팔을 지배한다. 둘을 섞으면 팔이
+    // 어중간하게 흔들려 공격인지 걷는 중인지 구별되지 않는다.
+    final swingProgress = isSwinging ? 1 - _swingTimer / _swingDuration : 0.0;
+    final attackArm = isSwinging ? _attackArmSwing(swingProgress) : null;
+
     CyborgRenderer.drawBody(
       canvas,
       design: design,
       yaw: _renderYaw,
       baseY: -bob,
       swing: swing,
-      // 남의 몸에 칼날을 켜 두면 나를 향해 겨눈 것처럼 읽힌다. 아군인지
-      // 적인지는 이름표가 말해 주고, 무기는 실제로 휘두를 때만 보여야 한다.
-      showBlade: false,
-      armSwing: _moving ? -swing * 6 : 0,
+      // 평소에는 칼날을 감춘다 — 남의 몸에 켜 두면 나를 향해 겨눈 것처럼
+      // 읽힌다. **휘두르는 순간에만** 꺼내야 공격이 눈에 띈다.
+      showBlade: isSwinging,
+      armSwing: attackArm ?? (_moving ? -swing * 6 : 0),
       time: _animTime,
     );
 
+    if (isSwinging) _renderSwingArc(canvas, swingProgress);
     _renderNameplate(canvas);
   }
 

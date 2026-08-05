@@ -429,6 +429,28 @@ class Reducers {
     );
   }
 
+  /// Calls the `pick_loot` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> pickLoot({
+    required Int64 lootId,
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    encoder.writeU64(lootId);
+    return await _reducerCaller.call(
+      pickLootDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
   /// Calls the `promote_leader` reducer.
   ///
   /// Returns a [TransactionResult] on success. Throws
@@ -813,6 +835,18 @@ class Reducers {
       final args = event.reducerArgs;
       if (args is! MoveToArgs) return;
       callback(ctx, args.gridX, args.gridY);
+    });
+  }
+
+  StreamSubscription<void> onPickLoot(
+    void Function(EventContext ctx, Int64 lootId) callback,
+  ) {
+    return _reducerEmitter.on(pickLootDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! PickLootArgs) return;
+      callback(ctx, args.lootId);
     });
   }
 

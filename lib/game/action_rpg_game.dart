@@ -207,7 +207,20 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   static const double _monsterReleaseRadius = 60;
 
   /// 동시에 살아 움직일 수 있는 상주 로봇의 상한.
-  static const int _maxActiveMonsters = 140;
+  ///
+  /// **관심 영역의 "몬스터 50" 은 여기서 만들어진다.** 구독 청크는 면적만 자를 뿐
+  /// 마릿수를 자르지 못한다 — 구독 SQL 에 `LIMIT` 이 없고, 몹은 레벨 띠를 따라
+  /// 군집 배치되어 저레벨 구역이 외곽보다 열 배 넘게 조밀하다. 그래서 마릿수
+  /// 상한은 그리는 쪽에서만 강제할 수 있다([_refreshMonsterStreaming] 이
+  /// 가까운 순으로 정렬한 뒤 이 수만큼만 만든다).
+  static const int _maxActiveMonsters = 50;
+
+  /// 동시에 그리는 다른 요원의 상한.
+  ///
+  /// [_maxActiveMonsters] 와 같은 이유로 필요하다. 안전지대(50×50 타일)는 플레이어
+  /// 구독 청크 3×3(222×222) 안에 통째로 들어가므로, 거기 사람이 몰리면 그 수만큼
+  /// 행이 온다. 그리는 것은 가까운 이 수만큼이다.
+  static const int _maxRemotePlayers = 50;
 
   GameStatus status = GameStatus.ready;
 
@@ -665,7 +678,17 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   void _syncRemotePlayers() {
     final seen = <int>{};
 
-    for (final other in presence.others) {
+    // 가까운 [_maxRemotePlayers] 명만 그린다. 구독이 면적만 자르므로 안전지대처럼
+    // 사람이 몰리는 곳에서는 수백 명이 올 수 있고, 그대로 다 만들면 저사양 기기가
+    // 먼저 무너진다. 화면에 보이지도 않는 사람을 위해 컴포넌트를 만들 이유가 없다.
+    final all = presence.others.toList()
+      ..sort((a, b) => (a.grid - player.grid)
+          .length2
+          .compareTo((b.grid - player.grid).length2));
+    final visible =
+        all.length > _maxRemotePlayers ? all.take(_maxRemotePlayers) : all;
+
+    for (final other in visible) {
       seen.add(other.characterId);
       final existing = _remotePlayers[other.characterId];
       if (existing != null) {
@@ -1091,8 +1114,59 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     if (_monsterStreamTimer <= 0) {
       _monsterStreamTimer = 0.3;
       _refreshMonsterStreaming();
+      // 전리품도 서버가 쥐고 있으므로 같은 주기로 맞춘다. 몹이 쓰러지는 자리와
+      // 떨어지는 자리가 같으니 따로 돌 이유가 없다.
+      _syncServerLoot();
     }
   }
+
+  /// 서버가 놓아 둔 전리품을 화면의 몸과 맞춘다.
+  ///
+  /// **무엇이 떨어졌는지는 서버가 정한다.** 각자 굴리면 같은 몹을 잡고도 서로
+  /// 다른 것을 보게 되어, 누가 무엇을 가져갔는지를 두고 이야기할 수조차 없다.
+  void _syncServerLoot() {
+    if (!presence.isAvailable) return;
+
+    final seen = <int>{};
+    for (final loot in presence.loots) {
+      final kind = _lootKindByName[loot.kind];
+      // 서버에 새 종류가 생겼는데 이 클라이언트가 낡았다. 그리지 않고 넘긴다 —
+      // 알 수 없는 것을 억지로 그리면 엉뚱한 아이콘이 뜬다.
+      if (kind == null) continue;
+      seen.add(loot.id);
+      if (_serverLoot.containsKey(loot.id)) continue;
+
+      final pickup = Pickup(
+        grid: loot.grid.clone(),
+        kind: kind,
+        amount: loot.amount.toDouble(),
+        serverId: loot.id,
+      );
+      _serverLoot[loot.id] = pickup;
+      pickups.add(pickup);
+      world.add(pickup);
+    }
+
+    // 표에서 사라진 것은 누군가 주웠거나 수명이 다한 것이다.
+    if (_serverLoot.length == seen.length) return;
+    final gone = [
+      for (final id in _serverLoot.keys)
+        if (!seen.contains(id)) id,
+    ];
+    for (final id in gone) {
+      _serverLoot.remove(id)?.removeFromParent();
+    }
+  }
+
+  /// 화면에 올라와 있는 서버 전리품. 번호로 같은 것을 다시 찾는다.
+  final Map<int, Pickup> _serverLoot = {};
+
+  /// 서버가 보내는 이름을 전리품 종류로 옮긴다.
+  ///
+  /// 서버 `world.rs` 의 `LOOT_KINDS` 와 같은 이름이어야 한다.
+  static final Map<String, PickupKind> _lootKindByName = {
+    for (final kind in PickupKind.values) kind.name: kind,
+  };
 
   /// 지금 카메라가 비추는 영역을 그리드 좌표 AABB로 돌려준다.
   ///
@@ -1180,7 +1254,15 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     final visible = _monsterReleaseRadius * _monsterReleaseRadius;
     final seen = <int>{};
 
-    for (final snapshot in presence.monsters) {
+    // **가까운 순서로 본다.** 구독은 면적만 자르므로(청크 3×3) 저레벨 사냥터처럼
+    // 몹이 조밀한 곳에서는 [_maxActiveMonsters] 를 훌쩍 넘는 수가 온다. 도착
+    // 순서대로 자르면 눈앞의 몹을 두고 화면 밖 몹을 그리게 된다.
+    final byDistance = presence.monsters.toList()
+      ..sort((a, b) => (a.grid - player.grid)
+          .length2
+          .compareTo((b.grid - player.grid).length2));
+
+    for (final snapshot in byDistance) {
       // 멀리 있는 것은 아직 그리지 않는다.
       if ((snapshot.grid - player.grid).length2 > visible) continue;
       seen.add(snapshot.id);
@@ -1622,9 +1704,9 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 다니는 것 자체가 선택이 된다. 20 레벨 언저리에서 상한에 닿던 곡선은
     // 그대로 두었다.
     //
-    // 전리품도 서버가 모는 몹에서는 내지 않는다. 지금은 서버에 드롭 판정이
-    // 없어 잠시 비는 자리이고, 로컬에서 내면 같은 몹을 잡은 사람마다 각자
-    // 다른 전리품을 줍게 되어 "하나의 월드" 가 다시 깨진다.
+    // **서버가 모는 몹의 전리품은 서버가 떨군다**(`spawn_loot`). 여기서 또 내면
+    // 같은 몹을 잡고도 사람마다 다른 것을 줍게 되어 "하나의 월드" 가 깨진다.
+    // 아래 굴림은 연습 모드처럼 서버가 없을 때만 도는 길이다.
     if (!enemy.isServerDriven) {
       _spawnDrops(
         enemy.grid,
@@ -1650,6 +1732,10 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 전리품을 회수했을 때 호출된다.
   void onPickupCollected(Pickup pickup) {
     pickups.remove(pickup);
+    // 서버가 쥔 것이면 목록에서도 뺀다. 서버 표에서도 곧 사라지지만, 그
+    // 왕복을 기다리는 동안 같은 번호로 몸이 다시 붙는 것을 막는다.
+    final id = pickup.serverId;
+    if (id != null) _serverLoot.remove(id);
     // 스크랩 코어는 그 자체가 점수다.
     score += pickup.kind == PickupKind.scrapCore
         ? pickup.amount.round()

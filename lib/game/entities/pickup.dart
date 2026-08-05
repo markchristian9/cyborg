@@ -210,6 +210,7 @@ class Pickup extends IsoEntity {
     double? amount,
     Vector2? launchVelocity,
     double launchLift = 2.6,
+    this.serverId,
   })  : spec = PickupSpec.table[kind]!,
         amount = amount ?? PickupSpec.table[kind]!.amount,
         _velocity = launchVelocity?.clone() ?? Vector2.zero(),
@@ -218,6 +219,25 @@ class Pickup extends IsoEntity {
 
   final PickupKind kind;
   final PickupSpec spec;
+
+  /// 서버가 부여한 번호. 서버가 떨군 전리품이면 값이 있다.
+  ///
+  /// **서버가 떨군 것은 서버가 거둔다.** 무엇이 떨어졌는지가 모두에게 같아야
+  /// 하는 이유는 분배 때문이다 — 각자 굴리면 같은 몹을 잡고도 서로 다른 것을
+  /// 보게 되어, 누가 무엇을 가져갔는지를 두고 이야기할 수조차 없다.
+  final int? serverId;
+
+  /// 서버가 쥐고 있는 전리품인지.
+  bool get isServerOwned => serverId != null;
+
+  /// 서버에 줍기를 요청해 두었는지. 한 번만 보내기 위한 빗장이다.
+  bool _pickRequested = false;
+
+  /// 서버가 거절했다. 남의 우선권이 살아 있거나 이미 누가 가져갔다.
+  ///
+  /// 거절당한 뒤에도 계속 요청하면 초당 수십 번 헛되이 왕복한다. 잠시 쉬었다
+  /// 다시 시도한다 — 우선권은 12 초 뒤 풀리므로 기다릴 값어치가 있다.
+  double _pickBackoff = 0;
 
   /// 즉시 환산형에 실제로 적용될 효과량.
   final double amount;
@@ -257,7 +277,11 @@ class Pickup extends IsoEntity {
   @override
   void update(double dt) {
     _life += dt;
-    if (_life > _lifetime) {
+    if (_pickBackoff > 0) _pickBackoff -= dt;
+    // 서버가 쥔 것은 수명도 서버가 정한다. 여기서 지우면 아직 표에 남아 있는
+    // 전리품이 내 화면에서만 사라져, 남들이 줍는 것을 보고도 나는 빈 바닥을
+    // 본다.
+    if (!isServerOwned && _life > _lifetime) {
       removeFromParent();
       return;
     }
@@ -325,7 +349,11 @@ class Pickup extends IsoEntity {
     final distance = toPlayer.length;
 
     if (distance < _grabDistance) {
-      _collect(player);
+      if (isServerOwned) {
+        _requestServerPick(player);
+      } else {
+        _collect(player);
+      }
       return;
     }
 
@@ -338,6 +366,29 @@ class Pickup extends IsoEntity {
     // 끌려가기 시작하면 점점 빨라져 확실히 따라붙는다.
     _magnetSpeed = math.min(11, _magnetSpeed + dt * 26);
     grid.add(toPlayer.normalized() * _magnetSpeed * dt);
+  }
+
+  /// 서버에 줍기를 청한다. **가져갔는지는 서버가 답한다.**
+  ///
+  /// 낙관적으로 먼저 먹은 척하지 않는다. 하나뿐인 물건에 두 사람이 동시에 손을
+  /// 뻗으면 한 명은 반드시 빈손인데, 미리 연출하면 그중 하나는 거짓이 된다 —
+  /// 회복량까지 화면에 뜬 뒤 되돌리는 것이 아무 일도 없던 것보다 나쁘다.
+  void _requestServerPick(Player player) {
+    if (_pickRequested || _collected || _pickBackoff > 0) return;
+    _pickRequested = true;
+
+    game.presence.pickLoot(serverId!).then((taken) {
+      _pickRequested = false;
+      if (taken) {
+        // 서버가 내 것이라 했다. 이제 효과를 낸다.
+        _collect(player);
+      } else {
+        // 남의 우선권이거나 이미 누가 가져갔다. 표에서 사라지면 게임 본체가
+        // 이 몸을 걷어 간다.
+        _pickBackoff = 1.5;
+        _magnetSpeed = 0;
+      }
+    });
   }
 
   void _collect(Player player) {

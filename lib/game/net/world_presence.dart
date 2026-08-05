@@ -16,7 +16,10 @@ class RemotePlayer {
     required this.alive,
     required this.hp,
     required this.maxHp,
-  });
+    this.lastAttackAtMicros = 0,
+    Vector2? attackDir,
+    this.attackSkill = AttackSkill.none,
+  }) : attackDir = attackDir ?? Vector2.zero();
 
   /// 캐릭터 식별자. 같은 사람을 프레임마다 다시 찾는 열쇠다.
   final int characterId;
@@ -38,7 +41,31 @@ class RemotePlayer {
   final int hp;
   final int maxHp;
 
+  /// 마지막으로 공격을 휘두른 시각(서버 기준 마이크로초).
+  ///
+  /// 이 값이 **바뀌는 것**을 보고 공격 동작을 한 번 재생한다. 절대 시각으로
+  /// 비교하지 않는 이유는 기기 시계가 서버와 어긋나기 때문이다 — 몇 초만 밀려도
+  /// 모든 공격이 "너무 오래된 것" 으로 걸러지거나 매 프레임 다시 재생된다.
+  final int lastAttackAtMicros;
+
+  /// 그 공격이 향한 방향(정규화된 그리드 벡터). 서버가 계산한 값이다.
+  final Vector2 attackDir;
+
+  /// 무엇으로 쳤는지. [AttackSkill] 의 값과 같다.
+  final int attackSkill;
+
   double get hpRatio => maxHp <= 0 ? 0 : (hp / maxHp).clamp(0.0, 1.0);
+}
+
+/// [RemotePlayer.attackSkill] 의 값. 서버 `world.rs` 의 `ATTACK_SKILL_*` 와 같다.
+///
+/// 번호가 어긋나면 남의 화면에서 스킬이 기본 공격으로 보이거나 그 반대가 된다.
+abstract final class AttackSkill {
+  /// 기본 공격.
+  static const int none = 0;
+
+  /// 플라즈마.
+  static const int plasma = 1;
 }
 
 /// 서버가 확정한 **내 몸**의 상태.
@@ -110,6 +137,37 @@ class ServerMonster {
   double get hpRatio => maxHp <= 0 ? 0 : (hp / maxHp).clamp(0.0, 1.0);
 }
 
+/// 바닥에 떨어져 있는 전리품 하나. **서버가 정한 것**이다.
+///
+/// 무엇이 떨어졌는지가 모두에게 같아야 하는 이유는 분배 때문이다. 각자 굴리면
+/// 같은 몹을 잡고도 서로 다른 것을 보게 되어, 누가 무엇을 가져갔는지를 두고
+/// 이야기할 수조차 없다.
+class ServerLoot {
+  ServerLoot({
+    required this.id,
+    required this.kind,
+    required this.amount,
+    required this.grid,
+    required this.reservedForMe,
+    required this.reservedForOther,
+  });
+
+  /// 서버가 부여한 번호. 주울 때 이 값을 보낸다.
+  final int id;
+
+  /// 클라이언트 `PickupKind` 의 이름. 모르는 값이면 그리지 않는다.
+  final String kind;
+
+  final int amount;
+  final Vector2 grid;
+
+  /// 내가 선점한 몹에서 나왔고 아직 우선권이 살아 있는지.
+  final bool reservedForMe;
+
+  /// 남의 우선권이 아직 살아 있는지. 지금 주우려 해도 서버가 거절한다.
+  final bool reservedForOther;
+}
+
 /// 월드에 누가 함께 있는지 알려 주고, 내 위치를 알리는 창구.
 ///
 /// 게임은 이 인터페이스만 알고 있으므로 서버에 붙지 않아도 그대로 돌아간다 —
@@ -137,6 +195,16 @@ abstract class WorldPresence {
 
   /// 서버가 관리하는 몬스터. 서버에 붙지 않았으면 빈 목록이다.
   List<ServerMonster> get monsters => const [];
+
+  /// 바닥에 놓인 전리품. 서버에 붙지 않았으면 빈 목록이다.
+  List<ServerLoot> get loots => const [];
+
+  /// 전리품을 줍는다. 성공하면 `true`.
+  ///
+  /// 결과를 **기다려서** 판정한다. 몬스터를 때릴 때와 다른 점인데, 전리품은
+  /// 하나뿐이라 두 사람이 동시에 손을 뻗으면 한 명은 반드시 빈손이기 때문이다.
+  /// 낙관적으로 처리하면 둘 다 획득 연출을 보고, 그중 하나는 거짓이 된다.
+  Future<bool> pickLoot(int lootId) async => false;
 
 
   /// 몬스터를 때린다. 사거리·쿨다운·선점·보상은 **전부 서버가 판정한다.**

@@ -316,6 +316,22 @@ class MoveToArgsDecoder implements ReducerArgDecoder<MoveToArgs> {
   }
 }
 
+class PickLootArgs {
+  PickLootArgs({required this.lootId});
+
+  final Int64 lootId;
+}
+
+class PickLootArgsDecoder implements ReducerArgDecoder<PickLootArgs> {
+  const PickLootArgsDecoder();
+
+  @override
+  PickLootArgs decode(BsatnDecoder decoder) {
+    final lootId = decoder.readU64();
+    return PickLootArgs(lootId: lootId);
+  }
+}
+
 class PromoteLeaderArgs {
   PromoteLeaderArgs({required this.targetCharacterId});
 
@@ -509,6 +525,10 @@ const leaveWorldDef = ReducerDef<LeaveWorldArgs>(
 const loginDef = ReducerDef<LoginArgs>('login', LoginArgsDecoder());
 const logoutDef = ReducerDef<LogoutArgs>('logout', LogoutArgsDecoder());
 const moveToDef = ReducerDef<MoveToArgs>('move_to', MoveToArgsDecoder());
+const pickLootDef = ReducerDef<PickLootArgs>(
+  'pick_loot',
+  PickLootArgsDecoder(),
+);
 const promoteLeaderDef = ReducerDef<PromoteLeaderArgs>(
   'promote_leader',
   PromoteLeaderArgsDecoder(),

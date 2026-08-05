@@ -44,7 +44,9 @@ void main() {
     await client.reducers.createCharacter(name: name, kind: 'male_cyborg');
     await pumpUntil(() => client.myCharacters.count() == 1);
 
-    await client.subscriptions.subscribe(kWorldSubscriptions);
+    // 구독은 자기 주변 청크만 건다. 이 테스트는 전원이 월드 중앙에 모이므로
+    // 같은 청크를 구독하게 되고, 서로의 행과 같은 몹을 본다.
+    await client.subscriptions.subscribe(worldSubscriptionsFor(center, center));
     await client.reducers.enterWorld(gridX: center, gridY: center);
 
     // 내 행이 실제로 도착할 때까지 기다린다. 이걸 빠뜨리면 뒤따르는 코드가

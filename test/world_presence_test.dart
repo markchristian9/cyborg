@@ -49,8 +49,10 @@ void main() {
     await client.reducers.createCharacter(name: name, kind: 'male_cyborg');
     await pumpUntil(() => client.myCharacters.count() == 1);
 
-    await client.subscriptions.subscribe(kWorldSubscriptions);
     final at = spawnPoint(dx, dy);
+    // 구독은 이제 **자기 주변 청크만** 건다. 입장 좌표를 먼저 정해야 어느 청크를
+    // 구독할지 알 수 있으므로, 좌표 계산이 구독보다 앞선다.
+    await client.subscriptions.subscribe(worldSubscriptionsFor(at.x, at.y));
     await client.reducers.enterWorld(gridX: at.x, gridY: at.y);
     return client;
   }

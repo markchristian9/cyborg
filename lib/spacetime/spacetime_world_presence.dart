@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flame/components.dart';
 import 'package:flutter/foundation.dart';
 import 'package:spacetimedb_sdk/spacetimedb_sdk.dart';
@@ -5,6 +8,7 @@ import 'package:spacetimedb_sdk/spacetimedb_sdk.dart';
 import '../game/net/world_presence.dart';
 import 'cyborg_connection.dart';
 import 'generated/client.dart';
+import 'generated/loot.dart';
 import 'generated/monster.dart';
 import 'generated/world_player.dart';
 
@@ -30,12 +34,26 @@ class SpacetimeWorldPresence extends WorldPresence {
   /// 가만히 서 있는 사람이 초당 5번씩 같은 좌표를 보낼 이유가 없다.
   static const double _minStep = 0.15;
 
+  /// 새 청크 안쪽으로 이만큼 들어온 뒤에야 구독을 옮긴다(타일).
+  ///
+  /// 경계선 위를 왕복하면 재구독이 진동한다. 보행 3.6 타일/초에서 최소 2.2 초,
+  /// 최대 속도 14 타일/초에서도 0.57 초 간격이 보장된다.
+  static const double _chunkHysteresis = 8.0;
+
+  /// 재구독 최소 간격. 넉백·대시로 경계를 스치는 경우까지 흡수한다.
+  static const Duration _resubCooldown = Duration(milliseconds: 1500);
+
   int? _querySetId;
   bool _subscribing = false;
 
   /// 열고 닫을 때마다 오르는 번호. 늦게 도착한 구독 완료가 이미 떠난 월드에
   /// 남지 않도록 막는다.
   int _generation = 0;
+
+  /// 지금 구독이 기준으로 삼은 청크. 실제 좌표가 아니라 **구독을 건 시점**의 것이다.
+  int? _subCx;
+  int? _subCy;
+  DateTime? _lastResubAt;
 
   DateTime? _lastSentAt;
   Vector2? _lastSentGrid;
@@ -47,6 +65,8 @@ class SpacetimeWorldPresence extends WorldPresence {
   ValueListenable<List<WorldPlayer>> get _rows => _client.worldPlayer.rows;
 
   ValueListenable<List<Monster>> get _monsterRows => _client.monster.rows;
+
+  ValueListenable<List<Loot>> get _lootRows => _client.loot.rows;
 
   /// 지금 조종 중인 캐릭터 번호. 몹의 선점자가 나인지 가릴 때 쓴다.
   int? get _myCharacterId {
@@ -62,7 +82,8 @@ class SpacetimeWorldPresence extends WorldPresence {
 
   /// 요원 목록과 몬스터 표 중 어느 쪽이 바뀌어도 화면을 다시 맞춘다.
   @override
-  Listenable get changes => Listenable.merge([_rows, _monsterRows]);
+  Listenable get changes =>
+      Listenable.merge([_rows, _monsterRows, _lootRows]);
 
   @override
   Future<void> enter(Vector2 grid) async {
@@ -73,12 +94,16 @@ class SpacetimeWorldPresence extends WorldPresence {
     if (_querySetId == null && !_subscribing) {
       _subscribing = true;
       try {
-        final id = await _client.subscriptions.subscribe(kWorldSubscriptions);
+        final id = await _client.subscriptions
+            .subscribe(worldSubscriptionsFor(grid.x, grid.y));
         if (generation != _generation) {
           _client.subscriptions.unsubscribe(id);
           return;
         }
         _querySetId = id;
+        _subCx = grid.x ~/ kPlayerSubChunkTiles;
+        _subCy = grid.y ~/ kPlayerSubChunkTiles;
+        _lastResubAt = DateTime.now();
       } finally {
         _subscribing = false;
       }
@@ -108,6 +133,8 @@ class SpacetimeWorldPresence extends WorldPresence {
     final id = _querySetId;
     if (id != null) {
       _querySetId = null;
+      _subCx = null;
+      _subCy = null;
       _client.subscriptions.unsubscribe(id);
     }
 
@@ -118,7 +145,14 @@ class SpacetimeWorldPresence extends WorldPresence {
 
   @override
   void report(Vector2 grid) {
-    if (!_entered || _inFlight) return;
+    if (!_entered) return;
+
+    // 좌표 보고와 **별개로** 확인한다. 아래 `_inFlight`·주기 검사에 걸려 보고를
+    // 건너뛰는 동안에도 청크는 넘어갈 수 있고, 그때 재구독을 놓치면 주변이
+    // 통째로 비어 보인다.
+    unawaited(_maybeResubscribe(grid));
+
+    if (_inFlight) return;
 
     final now = DateTime.now();
     final last = _lastSentAt;
@@ -130,6 +164,68 @@ class SpacetimeWorldPresence extends WorldPresence {
     _lastSentAt = now;
     _lastSentGrid = grid.clone();
     _send(grid);
+  }
+
+  /// 청크를 넘었으면 구독을 옮긴다.
+  ///
+  /// **새 구독을 먼저 걸고 옛 것을 나중에 푼다.** 순서를 뒤집으면 그 왕복 동안
+  /// 주변 사람과 몹이 통째로 사라졌다 나타난다. 겹치는 구간은 SpacetimeDB 가
+  /// 행 소유권을 함께 들고 있으므로, 옛 구독을 풀어도 겹친 행은 남는다.
+  ///
+  /// 전환 조건이 "청크가 달라졌다" 가 아니라 "새 청크 안쪽으로 [`_chunkHysteresis`]
+  /// 만큼 들어왔다" 인 이유는 경계선 위를 왕복할 때의 진동을 막기 위해서다.
+  /// 다만 **한 청크를 통째로 건너뛴 이동**(텔레포트·사망 재가동)은 히스테리시스도
+  /// 쿨다운도 무시한다 — 그 경우 옛 구독은 이미 아무 쓸모가 없다.
+  Future<void> _maybeResubscribe(Vector2 grid) async {
+    if (_subscribing || _querySetId == null) return;
+
+    final cx = grid.x ~/ kPlayerSubChunkTiles;
+    final cy = grid.y ~/ kPlayerSubChunkTiles;
+    final fromCx = _subCx;
+    final fromCy = _subCy;
+    if (fromCx == null || fromCy == null) return;
+    if (cx == fromCx && cy == fromCy) return;
+
+    // 3×3 밖으로 나갔다면 옛 구독에는 지금 주변이 한 칸도 없다. 즉시 옮긴다.
+    final jumped = (cx - fromCx).abs() > 1 || (cy - fromCy).abs() > 1;
+
+    if (!jumped) {
+      final localX = grid.x - cx * kPlayerSubChunkTiles;
+      final localY = grid.y - cy * kPlayerSubChunkTiles;
+      final inset = math.min(
+        math.min(localX, kPlayerSubChunkTiles - localX),
+        math.min(localY, kPlayerSubChunkTiles - localY),
+      );
+      if (inset < _chunkHysteresis) return;
+
+      final last = _lastResubAt;
+      if (last != null && DateTime.now().difference(last) < _resubCooldown) {
+        return;
+      }
+    }
+
+    final generation = _generation;
+    _subscribing = true;
+    final old = _querySetId;
+    try {
+      final id = await _client.subscriptions
+          .subscribe(worldSubscriptionsFor(grid.x, grid.y));
+      if (generation != _generation) {
+        // 그 사이 월드를 떠났다. 새로 건 것만 정리한다 — 옛 것은 `leave` 가 이미 풀었다.
+        _client.subscriptions.unsubscribe(id);
+        return;
+      }
+      _querySetId = id;
+      _subCx = cx;
+      _subCy = cy;
+      _lastResubAt = DateTime.now();
+      if (old != null) _client.subscriptions.unsubscribe(old);
+    } on SpacetimeDbException {
+      // 옛 구독을 그대로 둔 채 다음 기회를 기다린다. 화면이 조금 낡을 뿐,
+      // 아무것도 안 보이는 것보다 낫다.
+    } finally {
+      _subscribing = false;
+    }
   }
 
   Future<void> _send(Vector2 grid) async {
@@ -159,6 +255,41 @@ class SpacetimeWorldPresence extends WorldPresence {
           taggedByMe: mine != null && row.taggedBy?.toInt() == mine,
         ),
     ];
+  }
+
+  @override
+  List<ServerLoot> get loots {
+    final mine = _myCharacterId;
+    // 서버 시각은 마이크로초다. 우선권이 아직 살아 있는지 재는 데만 쓴다.
+    final nowMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
+    return [
+      for (final row in _lootRows.value)
+        ServerLoot(
+          id: row.id.toInt(),
+          kind: row.kind,
+          amount: row.amount,
+          grid: Vector2(row.gridX, row.gridY),
+          reservedForMe: mine != null &&
+              row.reservedFor?.toInt() == mine &&
+              row.reservedUntil.toInt() > nowMicros,
+          reservedForOther: row.reservedFor != null &&
+              row.reservedFor?.toInt() != mine &&
+              row.reservedUntil.toInt() > nowMicros,
+        ),
+    ];
+  }
+
+  @override
+  Future<bool> pickLoot(int lootId) async {
+    if (!_entered) return false;
+    try {
+      await _client.reducers.pickLoot(lootId: Int64(lootId));
+      return true;
+    } on SpacetimeDbException {
+      // 남이 먼저 가져갔거나, 우선권이 남아 있거나, 너무 멀다. 어느 쪽이든
+      // 내 것이 아니므로 조용히 빈손으로 돌아간다.
+      return false;
+    }
   }
 
   @override
@@ -226,6 +357,9 @@ class SpacetimeWorldPresence extends WorldPresence {
             alive: row.alive,
             hp: row.hp,
             maxHp: row.maxHp,
+            lastAttackAtMicros: row.lastAttackAt.toInt(),
+            attackDir: Vector2(row.attackDirX, row.attackDirY),
+            attackSkill: row.attackSkill,
           ),
     ];
   }

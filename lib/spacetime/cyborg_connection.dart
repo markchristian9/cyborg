@@ -31,17 +31,80 @@ const List<String> kCyborgViewSubscriptions = [
   'SELECT * FROM my_characters',
 ];
 
-/// 월드에 들어가 있는 동안 거는 구독.
+/// 플레이어 구독용 청크 한 변(타일). 서버 `PLAYER_SUB_CHUNK_TILES` 와 같아야 한다.
 ///
-/// `world_player` 는 공개 표라 **모든 접속자의 좌표**가 온다. 하나의 월드를
-/// 여럿이 공유하므로 서로 어디 있는지는 보여야 하는 정보다. 월드 밖(로그인·
-/// 캐릭터 선택 화면)에서는 필요 없으므로 입장할 때 걸고 나갈 때 푼다.
-const List<String> kWorldSubscriptions = [
-  'SELECT * FROM world_player',
-  // 몬스터도 **서버가 진실**이다. 클라이언트가 따로 만들어 내면 A 가 잡은 몹이
-  // B 화면에 살아 있게 되고, 그러면 같은 대상을 함께 때리는 일이 성립하지 않는다.
-  'SELECT * FROM monster',
-];
+/// 어긋나면 청크 번호가 서로 다른 격자를 가리켜 **아무도 서로를 보지 못한다.**
+const int kPlayerSubChunkTiles = 74;
+
+/// 한 줄에 들어가는 플레이어 구독 청크 수. 서버 `PLAYER_SUB_CHUNKS_PER_ROW` 와 같다.
+const int kPlayerSubChunksPerRow = 14; // (1006 / 74) + 1
+
+/// 몬스터·전리품 구독용 청크 한 변(타일). 서버 `CHUNK_TILES` 와 같다.
+///
+/// 플레이어와 격자를 달리 쓰는 이유는 밀도가 여덟 배 다르기 때문이다. 같은 면적에
+/// 사람 50 명이 들어오게 맞추면 몹은 400 기가 들어온다.
+const int kMonsterSubChunkTiles = 32;
+
+/// 한 줄에 들어가는 몬스터 구독 청크 수. 서버 `CHUNKS_PER_ROW` 와 같다.
+const int kMonsterSubChunksPerRow = 32; // (1006 / 32) + 1
+
+/// `(cx, cy)` 를 중심으로 한 3×3 청크 번호. 월드 밖은 버린다.
+List<int> _neighborChunks(int cx, int cy, int perRow) {
+  final keys = <int>[];
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      final nx = cx + dx;
+      final ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= perRow || ny >= perRow) continue;
+      keys.add(ny * perRow + nx);
+    }
+  }
+  return keys;
+}
+
+/// 월드에 들어가 있는 동안 거는 구독 — **자기 주변 청크만**.
+///
+/// 월드 전체를 구독하면 접속자가 늘수록 전송량이 제곱으로 커진다. 1,000 명이
+/// 서로를 구독하면 초당 1,000만 행이 오간다(`GAME-SERVER.md` §5). 그래서 자기가
+/// 선 청크와 이웃 여덟 칸만 구독한다.
+///
+/// **등식 나열밖에 쓸 수 없다.** 구독 SQL 에는 `LIMIT` 도 거리 정렬도 산술식도
+/// 없어서(`GAME-SERVER.md` §2.4) `WHERE x BETWEEN ...` 같은 자연스러운 범위
+/// 질의가 불가능하다. 정수 청크 번호를 `OR` 로 늘어놓는 것이 유일한 길이다.
+///
+/// **이것은 면적을 자를 뿐 인원을 자르지 않는다.** 안전지대처럼 사람이 몰리면
+/// 그 수만큼 그대로 온다. "가까운 50 명" 은 `ActionRpgGame` 이 거리순으로 잘라
+/// 만든다.
+List<String> worldSubscriptionsFor(double tileX, double tileY) {
+  String query(String table, String column, List<int> keys) =>
+      'SELECT * FROM $table WHERE '
+      '${keys.map((k) => '$column = $k').join(' OR ')}';
+
+  final playerKeys = _neighborChunks(
+    tileX ~/ kPlayerSubChunkTiles,
+    tileY ~/ kPlayerSubChunkTiles,
+    kPlayerSubChunksPerRow,
+  );
+  // 몹과 전리품은 같은 격자를 쓰므로 청크 번호를 한 번만 계산해 함께 쓴다.
+  final fieldKeys = _neighborChunks(
+    tileX ~/ kMonsterSubChunkTiles,
+    tileY ~/ kMonsterSubChunkTiles,
+    kMonsterSubChunksPerRow,
+  );
+
+  return [
+    query('world_player', 'sub_chunk', playerKeys),
+    // 몬스터도 **서버가 진실**이다. 클라이언트가 따로 만들어 내면 A 가 잡은 몹이
+    // B 화면에 살아 있게 되고, 그러면 같은 대상을 함께 때리는 일이 성립하지 않는다.
+    //
+    // 집 청크(`chunk`)가 아니라 `pos_chunk` 로 고르는 것이 중요하다. 집으로 고르면
+    // 확실히 잡히는 것이 반경 6 타일 안의 몹뿐이라 화면 구석이 빈다.
+    query('monster', 'pos_chunk', fieldKeys),
+    // 무엇이 떨어졌는지도 서버가 정한다. 각자 굴리면 같은 몹을 잡고도 서로 다른
+    // 것을 보게 되어 "네가 먹어라" 가 성립하지 않는다.
+    query('loot', 'chunk', fieldKeys),
+  ];
+}
 
 /// 파티에 관한 구독. 월드에 들어가 있는 동안 함께 건다.
 ///
