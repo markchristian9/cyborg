@@ -81,6 +81,9 @@ class PartyPanel extends PositionComponent
   /// 눌린 아래쪽 버튼. 0=추종, 1=나가기. 없으면 -1.
   int _pressedButton = -1;
 
+  /// 닫기 버튼을 누르고 있는가.
+  bool _pressedClose = false;
+
   final TextPaint _title = TextPaint(
     style: const TextStyle(
       color: GamePalette.textPrimary,
@@ -113,6 +116,7 @@ class PartyPanel extends PositionComponent
     _open = false;
     _pressedRow = -1;
     _pressedButton = -1;
+    _pressedClose = false;
     size.y = 0;
   }
 
@@ -240,10 +244,7 @@ class PartyPanel extends PositionComponent
       Vector2(padding, 9),
     );
 
-    if (!party.inParty) {
-      _muted.render(canvas, '눌러서 초대', Vector2(panelWidth - padding, 12),
-          anchor: Anchor.topRight);
-    }
+    _renderCloseButton(canvas);
 
     var y = headerHeight + padding;
 
@@ -273,6 +274,41 @@ class PartyPanel extends PositionComponent
 
     if (_showsFooter) _renderFooter(canvas, y);
   }
+
+  /// 제목 줄 오른쪽의 닫기(×) 버튼.
+  ///
+  /// 이 패널은 월드 메뉴로 열지만 **거기로 다시 가서 닫으라고 하면 닫는 길이
+  /// 있다는 것을 알 수 없다.** 열린 창에는 닫는 자리가 보여야 한다.
+  void _renderCloseButton(Canvas canvas) {
+    final rect = _closeRect;
+    if (_pressedClose) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(7)),
+        Paint()..color = GamePalette.hudBorder.withValues(alpha: 0.2),
+      );
+    }
+
+    final center = rect.center;
+    final paint = Paint()
+      ..color = GamePalette.textPrimary.withValues(alpha: 0.6)
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    const arm = 5.0;
+    canvas.drawLine(
+      center + const Offset(-arm, -arm),
+      center + const Offset(arm, arm),
+      paint,
+    );
+    canvas.drawLine(
+      center + const Offset(arm, -arm),
+      center + const Offset(-arm, arm),
+      paint,
+    );
+  }
+
+  /// 닫기 버튼의 자리. 손가락으로 누를 수 있도록 그리는 ×보다 넉넉하다.
+  Rect get _closeRect =>
+      Rect.fromLTWH(panelWidth - padding - 26, 4, 26, headerHeight - 6);
 
   void _renderRow(Canvas canvas, _Row row, double y, {required bool pressed}) {
     if (pressed) {
@@ -379,6 +415,11 @@ class PartyPanel extends PositionComponent
     if (!_open) return;
     final local = event.localPosition;
 
+    if (_closeRect.contains(Offset(local.x, local.y))) {
+      _pressedClose = true;
+      return;
+    }
+
     final listTop = headerHeight + padding;
     final rows = _rows.take(maxVisibleRows).toList();
     final listBottom = listTop + rowHeight * rows.length;
@@ -402,8 +443,15 @@ class PartyPanel extends PositionComponent
   void onTapUp(TapUpEvent event) {
     final row = _pressedRow;
     final button = _pressedButton;
+    final closing = _pressedClose;
     _pressedRow = -1;
     _pressedButton = -1;
+    _pressedClose = false;
+
+    if (closing) {
+      close();
+      return;
+    }
 
     if (row >= 0) {
       final rows = _rows.take(maxVisibleRows).toList();
@@ -417,6 +465,7 @@ class PartyPanel extends PositionComponent
   void onTapCancel(TapCancelEvent event) {
     _pressedRow = -1;
     _pressedButton = -1;
+    _pressedClose = false;
   }
 
   void _onRowSelected(_Row row) {

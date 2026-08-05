@@ -266,6 +266,69 @@ void main() {
     });
   });
 
+  group('추종 — 내가 쓰러졌다 되살아난 뒤', () {
+    test('안전지대로 튕겨 나가도 곧바로 놓치지 않는다', () {
+      final follow = PartyFollowController();
+      final leader = _leader(3, 0);
+
+      // 리더 옆에 붙어 사냥하던 중이라 진전 기준이 아주 작다.
+      _step(follow, leader: leader, self: Vector2(0, 0));
+
+      // 쓰러져 안전지대로 되살아났다 — 거리가 통째로 달라진다.
+      follow.noteSelfMoved();
+
+      // 다가가는 동안 끊기지 않아야 한다.
+      var distance = PartyFollowController.rejoinDistanceTiles + 40;
+      for (var i = 0; i < 60; i++) {
+        final decision = _step(
+          follow,
+          leader: _leader(distance, 0),
+          self: Vector2(0, 0),
+        );
+        expect(decision.action, PartyFollowAction.rejoin,
+            reason: '되살아난 자리까지의 거리를 진전 없음으로 읽으면 안 된다');
+        distance -= 0.6;
+      }
+    });
+
+    test('알리지 않으면 제한 시간 뒤 놓친다 — 이 알림이 필요한 이유', () {
+      final follow = PartyFollowController();
+
+      // 따라붙는 중이라 진전 기준이 실제 거리로 좁혀져 있다. (붙어 있는 동안에는
+      // 이 기준이 매 프레임 무한대로 풀리므로, 결함은 이 구간에서만 드러난다.)
+      var distance = PartyFollowController.rejoinDistanceTiles + 20;
+      for (var i = 0; i < 20; i++) {
+        _step(follow, leader: _leader(distance, 0), self: Vector2(0, 0));
+        distance -= 1.0;
+      }
+      expect(follow.isRejoining, isTrue);
+
+      // 여기서 쓰러져 안전지대로 되살아났다 — 훨씬 멀어졌는데 알리지 않는다.
+      var far = PartyFollowController.giveUpDistanceTiles - 10;
+      PartyFollowAction? last;
+      final steps = (PartyFollowController.rejoinTimeout / (1 / 60)).ceil() + 10;
+      for (var i = 0; i < steps; i++) {
+        last = _step(follow, leader: _leader(far, 0), self: Vector2(0, 0)).action;
+        if (last == PartyFollowAction.lost) break;
+        far -= 0.05; // 걸어가지만 옛 기준에 닿기엔 턱없이 느리다
+      }
+
+      expect(last, PartyFollowAction.lost,
+          reason: '옛 기준이 남아 있으면 다가가는 중에도 놓친 것이 된다');
+    });
+
+    test('따라갈 상대는 그대로 둔다', () {
+      final follow = PartyFollowController();
+      _step(follow, leader: _leader(3, 0), self: Vector2(0, 0));
+      follow.noteSelfMoved();
+
+      // reset 과 달리 대상 기억을 지우지 않으므로, 같은 상대에 대해 '바뀌었다'
+      // 로 오인하지 않는다.
+      final decision = _step(follow, leader: _leader(4, 0), self: Vector2(0, 0));
+      expect(decision.action, PartyFollowAction.anchor);
+    });
+  });
+
   group('추종 — 상태 초기화', () {
     test('추종을 끄면 다가가던 기록이 남지 않는다', () {
       final follow = PartyFollowController();

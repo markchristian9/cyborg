@@ -43,6 +43,7 @@ import 'systems/monster_codex.dart';
 import '../spacetime/reducer_error.dart';
 import 'ui/auto_hunt_control.dart';
 import 'ui/character_screen.dart';
+import 'ui/context_action_bar.dart';
 import 'ui/party_panel.dart';
 import 'ui/hud.dart';
 import 'ui/inventory_ui.dart';
@@ -132,6 +133,9 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
   /// 받은 초대를 알리는 카드. 열어 보지 않아도 스스로 뜬다.
   late PartyInviteCard _partyInviteCard;
+
+  /// 고른 요원에게 무엇을 할지 고르는 하단 막대.
+  late ContextActionBar _contextActionBar;
   late AutoHuntButton _autoHuntButton;
   late AutoHuntRadiusButton _autoHuntRadiusUp;
   late AutoHuntRadiusButton _autoHuntRadiusDown;
@@ -450,6 +454,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _teleportSheet = TeleportSheet();
     _partyPanel = PartyPanel();
     _partyInviteCard = PartyInviteCard();
+    _contextActionBar = ContextActionBar();
     _worldMenu = WorldMenu(
       entries: [
         WorldMenuEntry(
@@ -488,6 +493,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       _worldMenu,
       _partyPanel,
       _partyInviteCard,
+      _contextActionBar,
       _inventoryPanel,
       _characterScreen,
       _leaderboardScreen,
@@ -685,6 +691,9 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 자동 사냥을 끊는다. 앵커는 쓰러진 자리 근처이므로 그대로 두면 재가동
     // 직후 자기를 죽인 무리 한가운데로 혼자 걸어 들어가 다시 죽는다.
     if (autoHunt.enabled) autoHunt.disable();
+    // 안전지대에서 되살아나면 리더와의 거리가 통째로 달라진다. 다가가던 기록을
+    // 지우지 않으면 그 거리가 "진전 없음" 으로 읽혀 추종이 곧 끊긴다.
+    partyFollow.noteSelfMoved();
 
     spawnEffect(
       Explosion(
@@ -872,6 +881,12 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 배너가 쏟아진다.
   bool _followStopping = false;
 
+  /// 직전 프레임에 따라가고 있었는가.
+  ///
+  /// 서버가 추종을 푼 순간을 알아채려고 둔다 — 내가 끊은 것과 남이 끊은 것을
+  /// 구별해야 알림을 한 번만, 그리고 맞는 경우에만 띄울 수 있다.
+  bool _wasFollowing = false;
+
   /// 지금 파티장을 따라가는 중인가. HUD 가 읽는다.
   bool get isFollowingLeader => party.isFollowing && !_followStopping;
 
@@ -882,11 +897,20 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 기존 자동 사냥이 그대로 해 준다.
   void _updatePartyFollow(double dt) {
     if (!party.isFollowing) {
-      // 서버가 해제를 받아들였다. 다음 추종을 위해 상태를 비운다.
+      // 내가 끊은 것이 아니라 **서버 쪽에서** 풀린 경우가 있다 — 이끌던 사람이
+      // 그만두거나, 파티가 해산되거나, 내가 추방됐을 때다. 그때는 조용히 멈추는
+      // 대신 사냥터를 지금 자리로 되돌리고 왜 멈췄는지 알린다. 앵커를 그대로 두면
+      // 자동 사냥이 옛 리더의 마지막 좌표를 향해 계속 돈다.
+      if (_wasFollowing && !_followStopping) {
+        if (autoHunt.enabled) autoHunt.moveAnchor(player.grid);
+        _showBanner('추종이 끝났다');
+      }
+      _wasFollowing = false;
       _followStopping = false;
       partyFollow.reset();
       return;
     }
+    _wasFollowing = true;
     if (_followStopping) return;
 
     // 쓰러져 있는 동안에는 판단하지 않는다. 되살아난 뒤 거리를 보고 이어갈지
@@ -964,6 +988,43 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       _showBanner('추종 상태를 서버에 알리지 못했다');
     }
   }
+
+  // ── 원격 요원 선택 ──────────────────────────────────────────────────
+
+  /// 지금 골라 둔 다른 요원. 없으면 null.
+  ///
+  /// 이 값이 곧 하단 행동 막대가 누구를 향하는지를 정한다.
+  int? _selectedRemoteCharacterId;
+
+  int? get selectedRemoteCharacterId => _selectedRemoteCharacterId;
+
+  /// 고른 요원의 지금 모습. 월드에서 사라졌으면 null.
+  RemotePlayer? get selectedRemotePlayer {
+    final id = _selectedRemoteCharacterId;
+    if (id == null) return null;
+    for (final other in presence.others) {
+      if (other.characterId == id) return other;
+    }
+    return null;
+  }
+
+  /// 다른 요원을 고른다. 몸을 눌렀을 때 [RemotePlayerEntity] 가 부른다.
+  void selectRemotePlayer(int characterId) {
+    if (_selectedRemoteCharacterId == characterId) return;
+    _selectedRemoteCharacterId = characterId;
+    GameAudio.play(Sfx.uiClick);
+  }
+
+  /// 골라 둔 요원을 놓는다. 빈 땅을 누르면 불린다.
+  void clearRemotePlayerSelection() {
+    _selectedRemoteCharacterId = null;
+  }
+
+  /// 화면 가운데에 한 줄을 띄운다.
+  ///
+  /// HUD 컴포넌트가 사용자에게 알릴 일이 있을 때 쓴다 — 배너를 그리는 자리는
+  /// 하나여야 여러 알림이 서로를 덮어쓰지 않는다.
+  void showBanner(String message) => _showBanner(message);
 
   /// 파티 패널을 열고 닫는다. 월드 메뉴가 부른다.
   void togglePartyPanel() {
@@ -1051,7 +1112,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _followStopping = false;
     partyFollow.reset();
     _showBanner('파티장 추종 시작 — 경험치는 각자 몫이다');
-    unawaited(party.setFollowing(true));
+    unawaited(_runPartyAction(() => party.setFollowing(true)));
   }
 
   /// 자동 사냥을 켜고 끈다. 켤 때는 지금 서 있는 자리가 중심이 된다.
@@ -1858,6 +1919,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 직후 자기를 죽인 무리 한가운데로 혼자 걸어 들어가 다시 죽는다.
     final wasAutoHunting = autoHunt.enabled;
     if (wasAutoHunting) autoHunt.disable();
+    partyFollow.noteSelfMoved();
 
     // 쓰러진 자리에 잔해를 남긴다.
     spawnEffect(

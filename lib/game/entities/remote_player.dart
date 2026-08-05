@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flame/components.dart';
+import 'package:flame/events.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -21,7 +22,7 @@ import 'projectile.dart';
 /// 좌표를 그대로 순간이동시키지 않는 이유가 있다. 위치 보고는 0.2 초마다 오는데
 /// 받은 값을 즉시 반영하면 다른 사람이 초당 다섯 번 깜빡이며 튄다. 목표를 향해
 /// 보간하면 같은 데이터로도 걸어오는 것처럼 보인다.
-class RemotePlayerEntity extends IsoEntity {
+class RemotePlayerEntity extends IsoEntity with TapCallbacks {
   RemotePlayerEntity({required RemotePlayer snapshot})
       : characterId = snapshot.characterId,
         name = snapshot.name,
@@ -34,6 +35,25 @@ class RemotePlayerEntity extends IsoEntity {
 
   /// 서버가 부여한 캐릭터 식별자. 같은 사람을 다시 찾는 열쇠다.
   final int characterId;
+
+  /// 눌러서 고를 수 있는 영역의 반너비(화면 픽셀).
+  ///
+  /// **좁게 잡는다.** 형제 게임 라리엔은 넓은 원형 판정을 썼다가 몸 옆의 빈 땅
+  /// 클릭까지 삼켜 이동이 막히는 회귀를 겪었다. 여기서도 이 값을 키우면 그만큼
+  /// 월드를 클릭할 수 없어진다.
+  static const double _tapHalfWidth = 26;
+
+  /// 발밑(원점)에서 머리끝까지의 높이(화면 픽셀).
+  ///
+  /// 몸은 원점 **위쪽**으로 그려진다([CyborgDesign.totalHeight] 가 102~108).
+  /// 이름표(`y = -78` 부근)까지 넓히지 않는 이유는, 이름표가 몸보다 넓어 옆
+  /// 사람과 겹치면 엉뚱한 요원이 골라지기 때문이다.
+  static const double _tapHeight = 104;
+
+  /// 발밑에서 아래로 조금 더 잡는 여유.
+  ///
+  /// 발끝을 정확히 눌러야만 골라지면 손가락으로는 거의 못 고른다.
+  static const double _tapFootMargin = 6;
 
   String name;
   int level;
@@ -330,6 +350,32 @@ class RemotePlayerEntity extends IsoEntity {
   double _yawFor(Vector2 gridDir) {
     final screen = gridDirToScreenDir(gridDir.normalized());
     return math.atan2(screen.y, screen.x);
+  }
+
+  /// 눌린 지점이 이 몸 위인가.
+  ///
+  /// [IsoEntity] 는 `size` 를 잡지 않아(그리드 좌표만 다룬다) 기본 판정 영역이
+  /// 없다. 그래서 몸이 실제로 그려지는 사각형을 여기서 직접 만든다 — 넣지
+  /// 않으면 원격 요원을 눌러도 탭이 그대로 땅으로 내려가 이동이 된다.
+  @override
+  bool containsLocalPoint(Vector2 point) {
+    if (!alive) return false;
+    return point.x >= -_tapHalfWidth &&
+        point.x <= _tapHalfWidth &&
+        point.y >= -_tapHeight &&
+        point.y <= _tapFootMargin;
+  }
+
+  /// 눌러서 이 요원을 고른다.
+  ///
+  /// 탭만 받는다. 끌기는 [TapCallbacks] 가 받지 않으므로 그대로 땅으로 내려가
+  /// 이동이 되고, 몸 위를 스쳐 지나가도 걸음이 멈추지 않는다.
+  ///
+  /// 겹쳐 선 둘 중 누가 골라지는지는 [IsoEntity] 의 깊이 우선순위가 정한다 —
+  /// 화면에서 앞에 그려진(아래쪽) 요원이 먼저 탭을 받는다. 눈에 보이는 대로다.
+  @override
+  void onTapUp(TapUpEvent event) {
+    game.selectRemotePlayer(characterId);
   }
 
   @override

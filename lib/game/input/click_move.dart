@@ -26,6 +26,9 @@ class ClickMoveLayer extends PositionComponent
 
   @override
   void onTapDown(TapDownEvent event) {
+    // 빈 땅을 눌렀다는 것은 아무도 고르지 않았다는 뜻이다. 골라 둔 요원을 놓지
+    // 않으면 하단 행동 막대가 엉뚱한 사람을 향한 채 화면에 남는다.
+    game.clearRemotePlayerSelection();
     // 이 컴포넌트는 월드 원점에 놓이므로 로컬 좌표가 곧 월드 좌표다.
     game.movePlayerToWorldPoint(event.localPosition);
   }
