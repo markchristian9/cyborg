@@ -69,7 +69,7 @@ void main() {
     }
 
     test('서버 갱신 사이가 고른 속도로 메워진다', () {
-      const tick = 0.15;
+      const tick = 0.05;
       const speed = 2.4;
       final enemy = serverMonster();
 
@@ -168,7 +168,7 @@ void main() {
     // 프레임 리셋되어 등속 보간이 지수 감쇠로 퇴화하는" 결함을 놓쳤다.
 
     test('몬스터 — 같은 스냅샷을 매 프레임 넣어도 등속으로 걷는다', () {
-      const tick = 0.15;
+      const tick = 0.05;
       const speed = 2.4;
       final enemy = Enemy(
         species: MonsterCodex.byLevel(1),
@@ -213,7 +213,7 @@ void main() {
     });
 
     test('다른 요원 — 같은 스냅샷을 매 프레임 넣어도 등속으로 걷는다', () {
-      const tick = 0.2;
+      const tick = 0.05;
       const speed = 3.0;
       RemotePlayer snap(double x) => RemotePlayer(
             characterId: 7,
@@ -270,7 +270,7 @@ void main() {
         );
 
     test('보고 사이가 고른 속도로 메워진다', () {
-      const tick = 0.2;
+      const tick = 0.05;
       const speed = 3.0;
       final entity = RemotePlayerEntity(snapshot: snapshot(100));
       var serverX = 100.0;
