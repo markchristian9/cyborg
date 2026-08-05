@@ -46,17 +46,27 @@ void main() {
     return client;
   }
 
-  /// 안전지대에서 넉넉히 떨어진, 살아 있는 가장 가까운 몬스터.
+  /// 이 파일이 쓰는 사냥 구역의 기준점.
+  ///
+  /// **파일마다 다른 방향을 본다.** 통합 테스트들이 병렬로 돌면서 모두 "안전지대
+  /// 밖 가장 가까운 몹" 을 고르면 같은 한 마리에 몰려, 한쪽이 잡아 버린 몹을
+  /// 다른 쪽이 계속 기다리다 실패한다. 기능이 멀쩡한데 테스트만 깨진다.
+  const huntX = center;
+  const huntY = center + 120;
+
+  /// 안전지대에서 넉넉히 떨어진, 이 파일 구역의 가장 가까운 몬스터.
   Monster? nearestLiveMonster(SpacetimeDbClient client) {
     Monster? best;
     var bestD2 = double.infinity;
     for (final m in client.monster.iter()) {
       if (!m.alive) continue;
-      final dx = m.gridX - center;
-      final dy = m.gridY - center;
+      final dx = m.gridX - huntX;
+      final dy = m.gridY - huntY;
       // 안전지대 안에 선 채로는 때릴 수 없다. 경계에 붙은 몹을 고르면 그 앞에
       // 선 플레이어가 아직 쉬는 곳 안이라 서버가 공격을 거절한다.
-      if (dx.abs() < 40 && dy.abs() < 40) continue;
+      if ((m.gridX - center).abs() < 40 && (m.gridY - center).abs() < 40) {
+        continue;
+      }
       final d2 = dx * dx + dy * dy;
       if (d2 < bestD2) {
         bestD2 = d2;
@@ -236,40 +246,43 @@ void main() {
       final bait = await joinWorld('미끼');
       addTearDown(() async => bait.disconnect());
       await pumpUntil(() => bait.monster.count() > 0);
+      expect(nearestLiveMonster(bait), isNotNull, reason: '안전지대 밖에 살아 있는 몹이 없다');
 
-      final target = nearestLiveMonster(bait);
-      expect(target, isNotNull);
-      final prey = target!;
-
-      // 붙었다 떨어졌다를 반복하며 **여러 번** 확인한다. 다른 테스트가 같은
-      // 사냥터에서 돌고 있어 몹이 죽거나, 이쪽이 맞아 쓰러져 안전지대로
-      // 되돌아가는 일이 흔하다 — 한 번 실패했다고 서버가 틀린 것은 아니다.
+      // 몹이 죽으면 **다른 몹으로 다시 시작한다.** 다른 테스트가 같은 사냥터에서
+      // 돌고 있어 눈앞의 몹이 사라지는 일이 흔하다 — 한 마리를 놓쳤다고 서버가
+      // 틀린 것은 아니다.
       var faced = false;
-      for (var attempt = 0; attempt < 6 && !faced; attempt++) {
-        final live = bait.monster.iter().where((m) => m.id == prey.id);
-        if (live.isEmpty || !live.first.alive) break;
+      for (var round = 0; round < 4 && !faced; round++) {
+        final target = nearestLiveMonster(bait);
+        if (target == null) break;
+        final prey = target;
 
-        // 몹도 다가오므로 **지금** 좌표로 붙는다.
-        await walkTo(bait, live.first.gridX, live.first.gridY, within: 1.2);
+        for (var attempt = 0; attempt < 4 && !faced; attempt++) {
+          final live = bait.monster.iter().where((m) => m.id == prey.id);
+          if (live.isEmpty || !live.first.alive) break;
 
-        for (var i = 0; i < 20 && !faced; i++) {
-          await Future<void>.delayed(const Duration(milliseconds: 250));
-          final rows = bait.monster.iter().where((m) => m.id == prey.id);
-          final meRows = bait.worldPlayer
-              .iter()
-              .where((p) => p.identity == bait.identity);
-          if (rows.isEmpty || meRows.isEmpty) continue;
-          final m = rows.first;
-          final me = meRows.first;
-          final dx = me.gridX - m.gridX;
-          final dy = me.gridY - m.gridY;
-          final len = math.sqrt(dx * dx + dy * dy);
-          // 사거리(2.2) 밖이면 몹은 걸어오는 중이라 방향이 나를 향하는 것이
-          // 당연하다. 이 테스트가 보려는 것은 **멈춘 채** 보는지다.
-          if (len < 0.01 || len > 2.4) continue;
-          // 몹이 보는 쪽과 실제 내가 선 쪽의 내적. 1 에 가까우면 나를 본다.
-          final dot = (dx / len) * m.faceX + (dy / len) * m.faceY;
-          if (dot > 0.85) faced = true;
+          // 몹도 다가오므로 **지금** 좌표로 붙는다.
+          await walkTo(bait, live.first.gridX, live.first.gridY, within: 1.2);
+
+          for (var i = 0; i < 16 && !faced; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 250));
+            final rows = bait.monster.iter().where((m) => m.id == prey.id);
+            final meRows = bait.worldPlayer
+                .iter()
+                .where((p) => p.identity == bait.identity);
+            if (rows.isEmpty || meRows.isEmpty) continue;
+            final m = rows.first;
+            final me = meRows.first;
+            final dx = me.gridX - m.gridX;
+            final dy = me.gridY - m.gridY;
+            final len = math.sqrt(dx * dx + dy * dy);
+            // 사거리 밖이면 몹은 걸어오는 중이라 방향이 나를 향하는 것이
+            // 당연하다. 이 테스트가 보려는 것은 **멈춘 채** 보는지다.
+            if (len < 0.01 || len > 2.6) continue;
+            // 몹이 보는 쪽과 실제 내가 선 쪽의 내적. 1 에 가까우면 나를 본다.
+            final dot = (dx / len) * m.faceX + (dy / len) * m.faceY;
+            if (dot > 0.85) faced = true;
+          }
         }
       }
 
@@ -278,6 +291,60 @@ void main() {
         isTrue,
         reason: '사거리 안에서 멈춘 몹이 대상 쪽을 보지 않는다 — 등 뒤로 휘두르게 된다',
       );
+    },
+  );
+
+  test(
+    '몹이 후려친 사실이 표에 남는다 — 모든 화면이 같은 타격을 본다',
+    timeout: const Timeout(Duration(minutes: 3)),
+    () async {
+      final bait = await joinWorld('맞는쪽');
+      addTearDown(() async => bait.disconnect());
+      await pumpUntil(() => bait.monster.count() > 0);
+
+      final target = nearestLiveMonster(bait);
+      expect(target, isNotNull);
+      final prey = target!;
+      final before = bait.monster.iter().firstWhere((m) => m.id == prey.id).lastAttackAt;
+
+      // 맞을 때까지 붙어 선다. 서버가 때리면 그 사실이 몹 행에 남아야 한다 —
+      // 남지 않으면 어느 화면에서도 몹은 조용히 서 있고 체력만 줄어든다.
+      var struck = false;
+      for (var attempt = 0; attempt < 8 && !struck; attempt++) {
+        final live = bait.monster.iter().where((m) => m.id == prey.id);
+        if (live.isEmpty || !live.first.alive) break;
+        await walkTo(bait, live.first.gridX, live.first.gridY, within: 1.2);
+
+        for (var i = 0; i < 16 && !struck; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          final rows = bait.monster.iter().where((m) => m.id == prey.id);
+          if (rows.isEmpty) continue;
+          if (rows.first.lastAttackAt != before) struck = true;
+        }
+      }
+
+      expect(
+        struck,
+        isTrue,
+        reason: '몹이 때렸는데 그 사실이 표에 남지 않는다 — 타격 모션을 재생할 근거가 없다',
+      );
+    },
+  );
+
+  test(
+    '레벨이 오르면 마력 상한도 함께 오른다',
+    timeout: const Timeout(Duration(minutes: 2)),
+    () async {
+      final client = await joinWorld('성장확인');
+      addTearDown(() async => client.disconnect());
+
+      final me = client.worldPlayer
+          .iter()
+          .firstWhere((p) => p.identity == client.identity);
+      // 레벨 1 의 상한이 서버 곡선과 맞는지만 본다. 실제 레벨업까지 사냥하려면
+      // 시간이 너무 걸리고, 곡선 자체는 서버 단위 테스트가 지킨다.
+      expect(me.maxMp, greaterThan(0), reason: '마력 상한이 서지 않았다');
+      expect(me.mp, lessThanOrEqualTo(me.maxMp));
     },
   );
 

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flame/components.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -32,6 +34,22 @@ void main() {
   double stalledRatio(List<double> lengths) {
     final moving = lengths.where((l) => l > 1e-4).length;
     return 1 - moving / lengths.length;
+  }
+
+  /// 프레임별 이동거리의 변동계수(표준편차 / 평균).
+  ///
+  /// **끊김을 재는 진짜 지표다.** 멈춰 있는 프레임 수만 세면 지수 감쇠를 놓친다 —
+  /// 그 방식은 아예 서는 것이 아니라 목표에 가까울수록 느려졌다가 새 값이 오면
+  /// 다시 빨라지므로, 매 프레임 조금씩은 움직인다. 눈에 "뚝뚝" 으로 보이는 것은
+  /// 정지가 아니라 **갱신 주기마다 되풀이되는 가속과 감속**이다.
+  double speedVariation(List<double> lengths) {
+    final mean = lengths.reduce((a, b) => a + b) / lengths.length;
+    if (mean <= 0) return double.infinity;
+    final variance = lengths
+            .map((l) => (l - mean) * (l - mean))
+            .reduce((a, b) => a + b) /
+        lengths.length;
+    return math.sqrt(variance) / mean;
   }
 
   group('몬스터', () {
@@ -140,6 +158,101 @@ void main() {
       // 좌표는 그대로인데 방향만 바뀌었다. 이 값이 반영되지 않으면 때리는 몹이
       // 자기 등 뒤를 향해 휘두른다.
       expect(enemy.facing.x, greaterThan(0.9));
+    });
+  });
+
+  group('실제 호출 패턴 — 매 프레임 스냅샷', () {
+    // 게임 루프는 서버 갱신과 무관하게 **매 프레임** 스냅샷을 밀어 넣는다
+    // (`_syncRemotePlayers`·`_refreshMonsterStreaming`). 위 테스트들은 서버가
+    // 갱신한 순간에만 넣어서 이 경로를 재현하지 않았고, 그래서 "구간이 매
+    // 프레임 리셋되어 등속 보간이 지수 감쇠로 퇴화하는" 결함을 놓쳤다.
+
+    test('몬스터 — 같은 스냅샷을 매 프레임 넣어도 등속으로 걷는다', () {
+      const tick = 0.15;
+      const speed = 2.4;
+      final enemy = Enemy(
+        species: MonsterCodex.byLevel(1),
+        grid: Vector2(100, 100),
+      )..serverId = 1;
+
+      var serverX = 100.0;
+      var sinceTick = 0.0;
+      var current = Vector2(serverX, 100);
+
+      void advance(double dt) {
+        sinceTick += dt;
+        if (sinceTick >= tick) {
+          sinceTick -= tick;
+          serverX += speed * tick;
+          current = Vector2(serverX, 100);
+        }
+        // 갱신 여부와 무관하게 매 프레임 밀어 넣는다 — 실제 게임과 같다.
+        enemy.applyServerState(
+          grid: current,
+          hpRatio: 1,
+          alive: true,
+          tagged: false,
+        );
+        enemy.update(dt);
+      }
+
+      for (var i = 0; i < 40; i++) {
+        advance(1 / 60);
+      }
+      final lengths = stepLengths(advance, enemy.grid);
+
+      expect(stalledRatio(lengths), lessThan(0.1));
+      // 등속이면 프레임마다 같은 거리를 간다. 구간이 매 프레임 리셋되면 남은
+      // 거리에 비례해 다가가는 꼴이 되어, 갱신 주기마다 빨라졌다 느려지는
+      // 톱니가 생긴다 — 그것이 화면에서 "뚝뚝" 으로 보인다.
+      expect(
+        speedVariation(lengths),
+        lessThan(0.2),
+        reason: '갱신 주기마다 빨라졌다 느려진다 — 보간 구간이 리셋되고 있다',
+      );
+    });
+
+    test('다른 요원 — 같은 스냅샷을 매 프레임 넣어도 등속으로 걷는다', () {
+      const tick = 0.2;
+      const speed = 3.0;
+      RemotePlayer snap(double x) => RemotePlayer(
+            characterId: 7,
+            name: '동료',
+            kind: 'male_cyborg',
+            level: 3,
+            grid: Vector2(x, 100),
+            alive: true,
+            hp: 100,
+            maxHp: 100,
+          );
+
+      final entity = RemotePlayerEntity(snapshot: snap(100));
+      var serverX = 100.0;
+      var sinceTick = 0.0;
+      var current = snap(serverX);
+
+      void advance(double dt) {
+        sinceTick += dt;
+        if (sinceTick >= tick) {
+          sinceTick -= tick;
+          serverX += speed * tick;
+          current = snap(serverX);
+        }
+        entity.applySnapshot(current);
+        entity.update(dt);
+      }
+
+      for (var i = 0; i < 40; i++) {
+        advance(1 / 60);
+      }
+      final lengths = stepLengths(advance, entity.grid);
+
+      expect(stalledRatio(lengths), lessThan(0.1));
+      expect(
+        speedVariation(lengths),
+        lessThan(0.2),
+        reason: '갱신 주기마다 빨라졌다 느려진다 — 보간 구간이 리셋되고 있다',
+      );
     });
   });
 

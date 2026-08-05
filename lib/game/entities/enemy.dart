@@ -126,6 +126,18 @@ class Enemy extends IsoEntity with Damageable {
   /// 서버가 알려 준 바라보는 방향. 없으면 이동 방향에서 뽑는다.
   Vector2? _serverFacing;
 
+  /// 마지막으로 **재생한** 타격의 서버 시각(마이크로초).
+  int _playedAttackAt = 0;
+
+  /// 남은 타격 동작 시간(초). 0 보다 크면 후려치는 중이다.
+  double _serverStrike = 0;
+
+  /// 타격 동작 한 번의 길이(초).
+  ///
+  /// 서버의 몹 공격 쿨다운(1.2초)보다 훨씬 짧게 잡는다. 길면 동작이 이어져
+  /// 몇 대를 맞았는지 눈으로 셀 수 없다.
+  static const double _serverStrikeDuration = 0.28;
+
   /// 갱신 간격을 아직 모를 때 쓰는 기본값(초). 서버 AI 틱과 같은 값이다.
   static const double _defaultSegment = 0.15;
 
@@ -144,8 +156,22 @@ class Enemy extends IsoEntity with Damageable {
     required bool alive,
     required bool tagged,
     Vector2? facing,
+    int lastAttackAtMicros = 0,
   }) {
     _beginSegment(grid);
+
+    // **후려친 것은 사건이다.** 서버가 체력만 깎으면 어느 화면에서도 몹이
+    // 때리는 장면이 나오지 않는다 — 조용히 다가와 선 채로 사람의 체력만
+    // 줄어들어, 무엇에 맞았는지 알 수 없다.
+    //
+    // 첫 스냅샷에서는 재생하지 않는다. 시야에 들어오는 몹이 저마다 허공에
+    // 한 번씩 휘두르는 것을 막기 위해서다.
+    if (lastAttackAtMicros != _playedAttackAt) {
+      if (_playedAttackAt != 0 && lastAttackAtMicros != 0) {
+        _serverStrike = _serverStrikeDuration;
+      }
+      _playedAttackAt = lastAttackAtMicros;
+    }
 
     // 서버가 알려 준 방향이 있으면 그것이 맞다. **멈춰 있을 때가 이 값이 쓰이는
     // 자리다** — 좌표가 그대로면 움직임에서 방향을 뽑을 수 없다.
@@ -159,6 +185,23 @@ class Enemy extends IsoEntity with Damageable {
       _healthBarTimer = 2.5;
     }
     _serverHpRatio = hpRatio;
+
+    // **쓰러짐은 사건이다.** 서버가 `alive` 를 내리는 순간을 붙잡아야 폭발과
+    // 처치 점수가 나온다. 값만 갈아 두면 시체가 멀쩡히 선 채로 남고, 되살아날
+    // 때까지(20초) 다른 사람들 화면에서는 "안 죽는 몹" 으로 보인다.
+    //
+    // 누가 막타를 넣었든 모두의 화면에서 같은 연출이 나와야 한다 — 함께 때린
+    // 것이 화면에서 읽히는 유일한 순간이다.
+    if (_serverAlive && !alive) {
+      _serverAlive = false;
+      taggedByMe = tagged;
+      // 아직 월드에 붙지 않은 몸은 연출을 낼 곳이 없다. 스트리밍이 만든 직후
+      // 첫 스냅샷을 넣는 순간이 그렇고, 그때 폭발을 시도하면 게임을 찾지 못해
+      // 그 자리에서 죽는다. 상태만 내려 두면 붙지 않은 몸은 그려지지도 않는다.
+      if (isMounted) _die();
+      return;
+    }
+
     _serverAlive = alive;
     taggedByMe = tagged;
   }
@@ -265,6 +308,13 @@ class Enemy extends IsoEntity with Damageable {
   /// 갱신 간격을 실측해 구간 길이로 삼는다. 서버 틱이 바뀌어도 클라이언트가
   /// 저절로 따라가고, 네트워크가 흔들려도 평균 쪽으로 수렴한다.
   void _beginSegment(Vector2 serverGrid) {
+    // **같은 좌표가 다시 오면 아무것도 하지 않는다.** 스트리밍은 서버 갱신과
+    // 무관한 주기로 도므로, 올 때마다 구간을 다시 열면 지나온 시간이 매번 0 으로
+    // 돌아가 진행도가 한 프레임분에 머문다. 그러면 등속 보간이 지수 감쇠로
+    // 퇴화해 다시 끊겨 보인다.
+    final to = _segTo;
+    if (to != null && (to - serverGrid).length2 < 1e-6) return;
+
     final now = DateTime.now();
     final last = _lastServerAt;
     _lastServerAt = now;
@@ -320,7 +370,14 @@ class Enemy extends IsoEntity with Damageable {
         ..addScaled(span, t);
     }
 
-    phase = moving ? EnemyPhase.chase : EnemyPhase.idle;
+    // 후려치는 중이면 그 자세가 이긴다. 렌더가 이 상태를 보고 공격 자세를
+    // 그리므로, 걷는 모습으로 덮어 두면 때리는 장면이 사라진다.
+    if (_serverStrike > 0) {
+      _serverStrike = math.max(0, _serverStrike - dt);
+      phase = EnemyPhase.strike;
+    } else {
+      phase = moving ? EnemyPhase.chase : EnemyPhase.idle;
+    }
     _applyFacing(moving ? span : null);
   }
 

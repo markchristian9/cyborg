@@ -36,6 +36,12 @@ class CyborgDesign {
     required this.legThickness,
     required this.armThickness,
     required this.neckLength,
+    this.ankleRatio = 0.075,
+    this.kneeRatio = 0.215,
+    this.hipRatio = 0.385,
+    this.waistRatio = 0.500,
+    this.chestRatio = 0.625,
+    this.shoulderRatio = 0.700,
     required this.headWidth,
     required this.headHeight,
     required this.shoulderPadSize,
@@ -83,8 +89,37 @@ class CyborgDesign {
   /// 팔 한 짝의 두께.
   final double armThickness;
 
-  /// 목 길이.
+  /// 목 길이. 총 키에 대한 비율로 목 구간을 늘린다.
+  ///
+  /// 침투 프레임은 목이 길어 머리가 조금 더 높이 얹힌다 — 같은 키라도
+  /// 목이 길면 어깨가 상대적으로 내려가 실루엣이 가늘어 보인다.
   final double neckLength;
+
+  // ── 세로 골격 리듬 ──────────────────────────────────────────────────
+  //
+  // 예전에는 두 프레임이 같은 높이 비율을 공유해, 남녀 차이가 가로 폭과
+  // 머리 모양에만 갇혀 있었다. 세로 리듬이 같으면 폭만 다른 같은 인형이다.
+
+  /// 발목 높이(총 키 대비).
+  final double ankleRatio;
+
+  /// 무릎 높이. 높을수록 종아리가 짧고 허벅지가 길어 보인다.
+  final double kneeRatio;
+
+  /// 골반(다리가 갈라지는 지점) 높이.
+  final double hipRatio;
+
+  /// 허리(가장 잘록한 지점) 높이.
+  final double waistRatio;
+
+  /// 가슴 높이.
+  final double chestRatio;
+
+  /// 어깨선 높이. 몸통의 위 끝이다.
+  final double shoulderRatio;
+
+  /// 머리 아래(턱 밑) 높이. [neckLength]가 이 값을 밀어 올린다.
+  double get headBottomRatio => shoulderRatio + neckLength / totalHeight;
 
   /// 헬멧 폭.
   final double headWidth;
@@ -151,7 +186,16 @@ class CyborgDesign {
     hipWidth: 19,
     legThickness: 9,
     armThickness: 7.5,
-    neckLength: 7,
+    // 짧고 굵은 목. 어깨가 목을 먹어 들어가 육중해 보인다.
+    neckLength: 5.5,
+    // 강습 프레임의 세로 리듬: 골반이 낮고 몸통이 길다. 무게중심이 아래로
+    // 내려가 버티고 선 인상을 준다.
+    ankleRatio: 0.080,
+    kneeRatio: 0.225,
+    hipRatio: 0.370,
+    waistRatio: 0.480,
+    chestRatio: 0.620,
+    shoulderRatio: 0.705,
     headWidth: 21,
     headHeight: 19,
     shoulderPadSize: 11.5,
@@ -190,7 +234,16 @@ class CyborgDesign {
     hipWidth: 21,
     legThickness: 7,
     armThickness: 5.5,
-    neckLength: 8,
+    // 길고 가는 목. 머리가 높이 얹혀 실루엣이 가늘어 보인다.
+    neckLength: 9.5,
+    // 침투 프레임의 세로 리듬: 골반이 높고 다리가 길다. 무게중심이 위로
+    // 올라가 가볍고 날렵한 인상을 준다 — 폭만 줄인 것과는 다른 차이다.
+    ankleRatio: 0.070,
+    kneeRatio: 0.235,
+    hipRatio: 0.415,
+    waistRatio: 0.520,
+    chestRatio: 0.640,
+    shoulderRatio: 0.715,
     headWidth: 18.5,
     headHeight: 18,
     shoulderPadSize: 6.5,

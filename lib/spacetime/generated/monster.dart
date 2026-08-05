@@ -22,6 +22,7 @@ class Monster {
     required this.posChunk,
     required this.faceX,
     required this.faceY,
+    required this.lastAttackAt,
   });
 
   factory Monster.fromJson(Map<String, dynamic> json) {
@@ -44,6 +45,7 @@ class Monster {
       posChunk: json['posChunk'] ?? 0,
       faceX: (json['faceX'] ?? 0.0).toDouble(),
       faceY: (json['faceY'] ?? 0.0).toDouble(),
+      lastAttackAt: Int64(json['lastAttackAt'] ?? 0),
     );
   }
 
@@ -83,6 +85,8 @@ class Monster {
 
   final double faceY;
 
+  final Int64 lastAttackAt;
+
   void encodeBsatn(BsatnEncoder encoder) {
     encoder.writeU64(id);
     encoder.writeU32(spawnSlot);
@@ -102,6 +106,7 @@ class Monster {
     encoder.writeU32(posChunk);
     encoder.writeF32(faceX);
     encoder.writeF32(faceY);
+    encoder.writeI64(lastAttackAt);
   }
 
   static Monster decodeBsatn(BsatnDecoder decoder) {
@@ -124,6 +129,7 @@ class Monster {
       posChunk: decoder.readU32(),
       faceX: decoder.readF32(),
       faceY: decoder.readF32(),
+      lastAttackAt: decoder.readI64(),
     );
   }
 
@@ -147,6 +153,7 @@ class Monster {
       'posChunk': posChunk,
       'faceX': faceX,
       'faceY': faceY,
+      'lastAttackAt': lastAttackAt.toInt(),
     };
   }
 
@@ -171,7 +178,8 @@ class Monster {
             chunk == other.chunk &&
             posChunk == other.posChunk &&
             faceX == other.faceX &&
-            faceY == other.faceY;
+            faceY == other.faceY &&
+            lastAttackAt == other.lastAttackAt;
   }
 
   @override
@@ -195,12 +203,13 @@ class Monster {
       posChunk,
       faceX,
       faceY,
+      lastAttackAt,
     ]);
   }
 
   @override
   String toString() {
-    return 'Monster(id: $id, spawnSlot: $spawnSlot, kind: $kind, level: $level, homeX: $homeX, homeY: $homeY, gridX: $gridX, gridY: $gridY, hp: $hp, maxHp: $maxHp, alive: $alive, taggedBy: $taggedBy, taggedAt: $taggedAt, diedAt: $diedAt, chunk: $chunk, posChunk: $posChunk, faceX: $faceX, faceY: $faceY)';
+    return 'Monster(id: $id, spawnSlot: $spawnSlot, kind: $kind, level: $level, homeX: $homeX, homeY: $homeY, gridX: $gridX, gridY: $gridY, hp: $hp, maxHp: $maxHp, alive: $alive, taggedBy: $taggedBy, taggedAt: $taggedAt, diedAt: $diedAt, chunk: $chunk, posChunk: $posChunk, faceX: $faceX, faceY: $faceY, lastAttackAt: $lastAttackAt)';
   }
 
   Monster copyWith({
@@ -222,6 +231,7 @@ class Monster {
     int? posChunk,
     double? faceX,
     double? faceY,
+    Int64? lastAttackAt,
   }) {
     return Monster(
       id: id ?? this.id,
@@ -242,6 +252,7 @@ class Monster {
       posChunk: posChunk ?? this.posChunk,
       faceX: faceX ?? this.faceX,
       faceY: faceY ?? this.faceY,
+      lastAttackAt: lastAttackAt ?? this.lastAttackAt,
     );
   }
 }

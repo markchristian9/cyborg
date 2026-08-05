@@ -93,6 +93,7 @@ class MyWorldState {
     required this.maxMp,
     required this.alive,
     required this.deaths,
+    this.lastDamagedAtMicros = 0,
   });
 
   /// 서버가 확정한 내 좌표. 예측 위치를 여기로 수렴시킨다.
@@ -110,6 +111,16 @@ class MyWorldState {
   /// 일어서므로 `alive` 가 내려가 있는 순간을 구독으로 보리라 기대할 수 없다.
   /// 이 수가 **오르는 것**을 보고 사망 연출을 시작한다.
   final int deaths;
+
+  /// 마지막으로 피해를 입은 서버 시각(마이크로초).
+  ///
+  /// **피격도 사망과 같은 사건이다.** 체력 숫자만 받아 적으면 맞았는지 회복
+  /// 중인지 구별되지 않아, 화면에서는 아무 일도 없이 게이지만 줄어든다. 이 값이
+  /// **바뀌는 것**을 보고 피격 연출을 한 번 낸다.
+  ///
+  /// 서버에 이미 있던 열이다(안전지대 회복 대기의 기준). 새 스키마를 만들 이유가
+  /// 없었고, 클라이언트가 읽지 않고 있었을 뿐이다.
+  final int lastDamagedAtMicros;
 }
 
 /// 서버가 관리하는 몬스터 한 기.
@@ -127,6 +138,7 @@ class ServerMonster {
     required this.alive,
     required this.taggedByMe,
     Vector2? facing,
+    this.lastAttackAtMicros = 0,
   }) : facing = facing ?? Vector2.zero();
 
   /// 서버가 부여한 번호. 공격할 때 이 값을 보낸다.
@@ -146,6 +158,12 @@ class ServerMonster {
   /// 바라보는 방향. 사거리 안에 붙어 때리는 몹은 좌표가 멈추므로, 이 값이
   /// 없으면 화면마다 다른 쪽을 보고 있게 된다.
   final Vector2 facing;
+
+  /// 마지막으로 후려친 서버 시각(마이크로초).
+  ///
+  /// 이 값이 **바뀌는 것**을 보고 타격 동작을 한 번 재생한다. 없으면 몹은
+  /// 조용히 다가와 서 있고 사람의 체력만 줄어든다.
+  final int lastAttackAtMicros;
 
   double get hpRatio => maxHp <= 0 ? 0 : (hp / maxHp).clamp(0.0, 1.0);
 }
@@ -241,6 +259,14 @@ abstract class WorldPresence {
 
   /// 서버가 확정한 내 전투 상태. 월드에 들어가 있지 않으면 `null`.
   MyWorldState? get me => null;
+
+  /// 서버가 기록한 내 누적 경험치. 모르면 `null`.
+  ///
+  /// **서버가 모는 몹을 잡으면 경험치는 서버에서만 오른다**(`award_kill`).
+  /// 클라이언트는 그 몹에 로컬 경험치를 주지 않으므로(이중 지급이 되고, 크레딧은
+  /// 막타가 아니라 선점자에게 가므로), 이 값을 읽어 오지 않으면 사냥을 아무리
+  /// 해도 화면의 레벨과 경험치 바가 출격 시점에 멈춰 있다.
+  int? get serverTotalXp => null;
 
   /// 다른 요원의 목록이나 위치가 바뀔 때 알리는 신호.
   Listenable get changes;

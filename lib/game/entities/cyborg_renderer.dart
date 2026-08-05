@@ -35,16 +35,50 @@ abstract final class CyborgRenderer {
   /// 머리의 앞뒤 두께 비율. 구에 가까워 몸통보다 덜 납작해진다.
   static const double _headDepthRatio = 0.88;
 
-  // 신체 각 부위의 높이를 총 키에 대한 비율로 정의한다.
-  // 프레임마다 키가 달라도 비율이 같아 같은 계열의 실루엣을 유지한다.
-  static const double _ankleRatio = 0.075;
-  static const double _kneeRatio = 0.215;
-  static const double _hipRatio = 0.385;
-  static const double _waistRatio = 0.500;
-  static const double _chestRatio = 0.625;
-  static const double _shoulderRatio = 0.700;
-  static const double _neckRatio = 0.745;
-  static const double _headBottomRatio = 0.790;
+  // 빛은 화면 **왼쪽 위**에서 온다. 아래 두 셰이딩 함수가 그 방향을 공유하며,
+  // 부위마다 밝은 면을 임의로 칠하면 빛이 여러 곳에서 오는 것처럼 보여
+  // 입체가 무너진다.
+
+  /// 원통형 부위(팔·다리·목)에 두르는 3단 명암.
+  ///
+  /// 단색으로 채우면 아무리 실루엣을 다듬어도 "납작한 판"으로 읽힌다.
+  /// 그라디언트 채색은 셰이더 fill 이라 오프스크린 패스가 없어 `MaskFilter`
+  /// 보다 훨씬 싸다 — 입체감을 얻는 가장 값싼 수단이다.
+  ///
+  /// [rect]는 부위를 감싸는 사각형, [base]는 중간 톤이다.
+  static Paint _cylinderShade(Rect rect, Color base, Color light) {
+    return Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+        colors: [
+          // 왼쪽에서 빛이 오므로 왼쪽이 밝고, 가운데가 기본, 오른쪽이 그늘.
+          Color.lerp(light, base, 0.15)!,
+          base,
+          Color.lerp(base, _deepShade, 0.55)!,
+        ],
+        stops: const [0.0, 0.46, 1.0],
+      ).createShader(rect);
+  }
+
+  /// 넓은 판(몸통·헬멧)에 쓰는 사선 4단 명암.
+  ///
+  /// 위에서 비스듬히 받는 빛을 표현한다. 원통보다 단계를 하나 더 두어
+  /// 반사광(아래쪽이 살짝 밝아지는 것)까지 넣는다.
+  static Paint _plateShade(Rect rect, Color base, Color light) {
+    return Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          light,
+          Color.lerp(light, base, 0.62)!,
+          base,
+          Color.lerp(base, _deepShade, 0.5)!,
+        ],
+        stops: const [0.0, 0.3, 0.62, 1.0],
+      ).createShader(rect);
+  }
 
   /// 사이보그 본체를 그린다.
   ///
@@ -142,13 +176,64 @@ abstract final class CyborgRenderer {
       final footX = hipX + strideX;
       final footY = y.ankle + strideY;
 
-      final path = Path()
-        ..moveTo(hipX - t / 2, y.hip)
-        ..lineTo(hipX + t / 2, y.hip)
-        ..lineTo(footX + t * 0.45, footY)
-        ..lineTo(footX - t * 0.45, footY)
+      // 무릎에서 실제로 꺾이는 2분절 다리.
+      //
+      // 예전에는 골반→발목을 잇는 사다리꼴 하나여서, 걸을 때 끝점만 움직이고
+      // 다리가 휘지 않는 막대로 읽혔다. 허벅지와 종아리를 나누고 무릎을
+      // 진행 방향 쪽으로 내밀면 걸음에 무게가 실린다.
+      final kneeLead = strideX * 0.42;
+      final kneeX = hipX + kneeLead;
+      final kneeY = y.knee + strideY * 0.35;
+
+      // 허벅지: 골반에서 굵게 시작해 무릎으로 좁아진다.
+      final thighTop = t * 0.56;
+      final kneeHalf = t * 0.40;
+      final thigh = Path()
+        ..moveTo(hipX - thighTop, y.hip)
+        ..cubicTo(
+          hipX - thighTop * 0.98, (y.hip + kneeY) * 0.5,
+          kneeX - kneeHalf * 1.12, (y.hip + kneeY) * 0.5,
+          kneeX - kneeHalf, kneeY,
+        )
+        ..lineTo(kneeX + kneeHalf, kneeY)
+        ..cubicTo(
+          kneeX + kneeHalf * 1.18, (y.hip + kneeY) * 0.5,
+          hipX + thighTop * 1.02, (y.hip + kneeY) * 0.5,
+          hipX + thighTop, y.hip,
+        )
         ..close();
-      canvas.drawPath(path, isBack ? dark : armor);
+
+      // 종아리: 무릎 아래에서 한 번 부풀었다가 발목으로 급히 좁아진다.
+      // 이 부풂이 없으면 아래쪽이 그냥 막대가 된다.
+      final ankleHalf = t * 0.30;
+      final calfBulge = t * 0.46;
+      final shin = Path()
+        ..moveTo(kneeX - kneeHalf, kneeY)
+        ..cubicTo(
+          kneeX - calfBulge, kneeY + (footY - kneeY) * 0.32,
+          footX - ankleHalf * 1.5, kneeY + (footY - kneeY) * 0.72,
+          footX - ankleHalf, footY,
+        )
+        ..lineTo(footX + ankleHalf, footY)
+        ..cubicTo(
+          footX + ankleHalf * 1.35, kneeY + (footY - kneeY) * 0.72,
+          kneeX + kneeHalf * 1.05, kneeY + (footY - kneeY) * 0.32,
+          kneeX + kneeHalf, kneeY,
+        )
+        ..close();
+
+      if (isBack) {
+        canvas.drawPath(thigh, dark);
+        canvas.drawPath(shin, dark);
+      } else {
+        // 원통 명암. 왼쪽이 밝고 오른쪽이 그늘이라 다리가 둥글게 읽힌다.
+        final legRect = Rect.fromLTRB(
+          hipX - thighTop, y.hip, hipX + thighTop, footY);
+        final shade = _cylinderShade(
+          legRect, design.armorBase, design.armorLight);
+        canvas.drawPath(thigh, shade);
+        canvas.drawPath(shin, shade);
+      }
 
       // 인공 힘줄이 노출된 프레임은 종아리에 발광 라인을 그린다.
       if (design.has(CyborgImplant.legTendon)) {
@@ -162,19 +247,24 @@ abstract final class CyborgRenderer {
         );
       }
 
-      // 무릎 마디. 허벅지와 종아리를 끊어 축소해도 관절이 1px 이라도 남게
-      // 한다. 이 마디가 없으면 다리가 하나의 막대로 뭉친다.
-      final kneeX = hipX + (footX - hipX) * 0.45;
+      // 무릎 장갑판. 관절 위에 덮여 허벅지·종아리를 시각적으로 끊는다.
+      // 축소해도 이 마디 하나는 남아야 다리가 막대로 뭉치지 않는다.
+      final kneeCap = Rect.fromCenter(
+        center: Offset(kneeX, kneeY),
+        width: t * 1.18,
+        height: t * 0.66,
+      );
       canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromCenter(
-            center: Offset(kneeX, y.knee),
-            width: t * 1.12,
-            height: t * 0.62,
-          ),
-          Radius.circular(t * 0.28),
+        RRect.fromRectAndCorners(
+          kneeCap,
+          topLeft: Radius.circular(t * 0.32),
+          topRight: Radius.circular(t * 0.32),
+          bottomLeft: Radius.circular(t * 0.16),
+          bottomRight: Radius.circular(t * 0.16),
         ),
-        isBack ? dark : armorLight,
+        isBack
+            ? dark
+            : _plateShade(kneeCap, design.armorLight, GamePalette.wallTop),
       );
 
       // 부츠
@@ -241,26 +331,50 @@ abstract final class CyborgRenderer {
     // taper가 음수일수록 허리가 안쪽으로 깊게 파인다.
     final pinch = design.torsoTaper * chest;
 
+    // 옆구리는 곡률이 **두 번** 바뀌어야 몸통으로 읽힌다 —
+    // 볼록한 흉곽 → 오목한 허리 → 다시 벌어지는 골반.
+    // 한 번만 휘면 어느 쪽으로 굽든 "캡슐"이 된다.
+    final ribY = y.chestTop + (y.waist - y.chestTop) * 0.32;
+    final ribOut = chest * 1.035;
+    final hipFlare = hip * 1.02;
+
     final path = Path()
-      ..moveTo(-chest, y.chestTop)
-      ..lineTo(chest, y.chestTop)
-      ..quadraticBezierTo(
-        chest + pinch,
-        (y.chestTop + y.waist) / 2,
-        waist,
-        y.waist,
+      ..moveTo(-chest * 0.94, y.chestTop)
+      ..lineTo(chest * 0.94, y.chestTop)
+      // 오른쪽: 흉곽으로 부풀었다가
+      ..cubicTo(
+        ribOut, y.chestTop + (ribY - y.chestTop) * 0.55,
+        chest + pinch, ribY + (y.waist - ribY) * 0.45,
+        waist, y.waist,
       )
-      ..lineTo(hip, y.hip)
+      // 허리에서 골반으로 다시 벌어진다
+      ..cubicTo(
+        waist + (hipFlare - waist) * 0.34, y.waist + (y.hip - y.waist) * 0.36,
+        hipFlare, y.waist + (y.hip - y.waist) * 0.72,
+        hip, y.hip,
+      )
       ..lineTo(-hip, y.hip)
-      ..lineTo(-waist, y.waist)
-      ..quadraticBezierTo(
-        -chest - pinch,
-        (y.chestTop + y.waist) / 2,
-        -chest,
-        y.chestTop,
+      ..cubicTo(
+        -hipFlare, y.waist + (y.hip - y.waist) * 0.72,
+        -waist - (hipFlare - waist) * 0.34, y.waist + (y.hip - y.waist) * 0.36,
+        -waist, y.waist,
+      )
+      ..cubicTo(
+        -chest - pinch, ribY + (y.waist - ribY) * 0.45,
+        -ribOut, y.chestTop + (ribY - y.chestTop) * 0.55,
+        -chest * 0.94, y.chestTop,
       )
       ..close();
-    canvas.drawPath(path, armor);
+
+    // 단색 대신 사선 4단 명암. 위 왼쪽에서 빛을 받아 아래 오른쪽이 그늘진다.
+    canvas.drawPath(
+      path,
+      _plateShade(
+        Rect.fromLTRB(-chest, y.chestTop, chest, y.hip),
+        design.armorBase,
+        design.armorLight,
+      ),
+    );
 
     // 흉갑 하이라이트. 빛을 받는 면이 시선각을 따라 이동한다.
     final lit = view.project(-0.6, design.chestWidth / 2, view.bodyDepth(design));
@@ -563,13 +677,56 @@ abstract final class CyborgRenderer {
       // 위아래로 펌프질하는 것처럼 보인다 — 다리와 같이 시선각으로 분해한다.
       final swingX = arm.phase * 0.85 * view.strideProjection;
       final swingY = arm.phase * 0.45 * view.strideDepth;
-      final path = Path()
-        ..moveTo(arm.x - t / 2, armTop)
-        ..lineTo(arm.x + t / 2, armTop)
-        ..lineTo(arm.x + t / 2 + swingX, armTop + armLength + swingY)
-        ..lineTo(arm.x - t / 2 + swingX, armTop + armLength + swingY)
+
+      // 팔꿈치에서 꺾이는 2분절. 다리와 같은 이유다 — 어깨에서 손목까지
+      // 이어지는 하나의 기둥은 아무리 곡선을 둘러도 막대로 읽힌다.
+      final elbowY = armTop + armLength * 0.52;
+      final elbowX = arm.x + swingX * 0.45;
+      final handX = arm.x + swingX;
+      final handY = armTop + armLength + swingY;
+
+      final upperHalf = t * 0.52;
+      final elbowHalf = t * 0.40;
+      final wristHalf = t * 0.32;
+
+      // 상완: 어깨에서 굵게 시작해 팔꿈치로 좁아진다.
+      final upper = Path()
+        ..moveTo(arm.x - upperHalf, armTop)
+        ..cubicTo(
+          arm.x - upperHalf, armTop + armLength * 0.26,
+          elbowX - elbowHalf * 1.1, armTop + armLength * 0.3,
+          elbowX - elbowHalf, elbowY,
+        )
+        ..lineTo(elbowX + elbowHalf, elbowY)
+        ..cubicTo(
+          elbowX + elbowHalf * 1.1, armTop + armLength * 0.3,
+          arm.x + upperHalf, armTop + armLength * 0.26,
+          arm.x + upperHalf, armTop,
+        )
         ..close();
-      canvas.drawPath(path, armor);
+
+      // 전완: 팔꿈치 아래에서 살짝 부풀었다가 손목으로 좁아진다.
+      final fore = Path()
+        ..moveTo(elbowX - elbowHalf, elbowY)
+        ..cubicTo(
+          elbowX - elbowHalf * 1.08, elbowY + (handY - elbowY) * 0.4,
+          handX - wristHalf * 1.3, elbowY + (handY - elbowY) * 0.75,
+          handX - wristHalf, handY,
+        )
+        ..lineTo(handX + wristHalf, handY)
+        ..cubicTo(
+          handX + wristHalf * 1.25, elbowY + (handY - elbowY) * 0.75,
+          elbowX + elbowHalf * 1.05, elbowY + (handY - elbowY) * 0.4,
+          elbowX + elbowHalf, elbowY,
+        )
+        ..close();
+
+      final armRect =
+          Rect.fromLTRB(arm.x - upperHalf, armTop, arm.x + upperHalf, handY);
+      final shade =
+          _cylinderShade(armRect, design.armorBase, design.armorLight);
+      canvas.drawPath(upper, shade);
+      canvas.drawPath(fore, shade);
       // 손목 마디. 팔 끝을 끊어 축소해도 관절이 남게 한다.
       canvas.drawRRect(
         RRect.fromRectAndRadius(
@@ -651,18 +808,66 @@ abstract final class CyborgRenderer {
       _drawPonytail(canvas, design, view, cy, headR, headD, hh);
     }
 
-    // 헬멧
-    final helmet = RRect.fromRectAndCorners(
-      Rect.fromCenter(center: Offset(0, cy), width: hw, height: hh),
-      topLeft: Radius.circular(hw * 0.38),
-      topRight: Radius.circular(hw * 0.38),
-      bottomLeft: Radius.circular(hw * 0.19),
-      bottomRight: Radius.circular(hw * 0.19),
+    // 헬멧.
+    //
+    // 예전에는 중심이 x=0 에 고정된 둥근 사각형이라, 옆·뒤를 봐도 "정면
+    // 헬멧이 납작해진" 모습이었다. 머리가 구에 가까워 몸통만큼 얇아지지
+    // 않는 것은 맞지만, **중심과 윤곽은 시선을 따라 움직여야** 한다.
+    // 얼굴 쪽(둘레각 0)과 뒤통수(π)를 각각 투영해 그 사이를 곡선으로 잇는다.
+    final faceAnchor = view.project(0, headR * 0.55, headD);
+    final napeAnchor = view.project(math.pi, headR * 0.55, headD);
+    // 얼굴이 앞에 있으면 얼굴 쪽이 무게중심이 된다.
+    final shellCx = (faceAnchor.x + napeAnchor.x) * 0.5;
+    final half = hw / 2;
+    final top = cy - hh / 2;
+    final bottom = cy + hh / 2;
+
+    // 곡률이 세 번 바뀐다 — 완만한 이마 → 각진 관자놀이 → 안으로 파인 턱.
+    // 한 반경으로 두르면 어느 각도에서 봐도 같은 캡슐이 된다.
+    final browY = top + hh * 0.30;
+    final templeY = cy + hh * 0.06;
+    final jawY = bottom - hh * 0.10;
+    final helmetPath = Path()
+      ..moveTo(shellCx - half * 0.20, top)
+      // 이마 마루(왼쪽)
+      ..cubicTo(
+        shellCx - half * 0.78, top + hh * 0.02,
+        shellCx - half * 1.0, browY - hh * 0.10,
+        shellCx - half, browY,
+      )
+      // 관자놀이 — 여기서 각이 선다
+      ..lineTo(shellCx - half * 0.97, templeY)
+      // 턱으로 안쪽으로 파고든다
+      ..cubicTo(
+        shellCx - half * 0.88, jawY - hh * 0.02,
+        shellCx - half * 0.60, bottom,
+        shellCx - half * 0.24, bottom,
+      )
+      ..lineTo(shellCx + half * 0.30, bottom)
+      ..cubicTo(
+        shellCx + half * 0.66, bottom,
+        shellCx + half * 0.92, jawY - hh * 0.02,
+        shellCx + half * 0.99, templeY,
+      )
+      ..lineTo(shellCx + half, browY)
+      ..cubicTo(
+        shellCx + half * 1.0, browY - hh * 0.10,
+        shellCx + half * 0.80, top + hh * 0.02,
+        shellCx - half * 0.20, top,
+      )
+      ..close();
+
+    canvas.drawPath(
+      helmetPath,
+      _plateShade(
+        Rect.fromLTRB(shellCx - half, top, shellCx + half, bottom),
+        design.armorLight,
+        GamePalette.wallTop,
+      ),
     );
-    canvas.drawRRect(helmet, armorLight);
     // 헬멧 윤곽의 림 라이트.
-    canvas.drawRRect(
-      helmet,
+    canvas.drawPath(
+      helmetPath,
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.2
@@ -966,18 +1171,21 @@ class _Limb {
 ///
 /// 발밑이 원점이고 위로 갈수록 음수이므로 모든 값이 0 이하다.
 class _Levels {
+  // 높이 비율은 프레임마다 다르다. 같은 비율을 공유하면 폭만 다른 같은
+  // 인형이 되므로, 무게중심(골반 높이)·다리 길이·목 길이로 리듬을 가른다.
   _Levels(CyborgDesign design, double baseY)
       : foot = baseY,
-        ankle = baseY - design.totalHeight * CyborgRenderer._ankleRatio,
-        knee = baseY - design.totalHeight * CyborgRenderer._kneeRatio,
-        hip = baseY - design.totalHeight * CyborgRenderer._hipRatio,
-        waist = baseY - design.totalHeight * CyborgRenderer._waistRatio,
-        chest = baseY - design.totalHeight * CyborgRenderer._chestRatio,
-        chestTop = baseY - design.totalHeight * CyborgRenderer._shoulderRatio,
-        shoulder = baseY - design.totalHeight * CyborgRenderer._shoulderRatio,
-        neck = baseY - design.totalHeight * CyborgRenderer._neckRatio,
-        headBottom =
-            baseY - design.totalHeight * CyborgRenderer._headBottomRatio;
+        ankle = baseY - design.totalHeight * design.ankleRatio,
+        knee = baseY - design.totalHeight * design.kneeRatio,
+        hip = baseY - design.totalHeight * design.hipRatio,
+        waist = baseY - design.totalHeight * design.waistRatio,
+        chest = baseY - design.totalHeight * design.chestRatio,
+        chestTop = baseY - design.totalHeight * design.shoulderRatio,
+        shoulder = baseY - design.totalHeight * design.shoulderRatio,
+        neck = baseY -
+            design.totalHeight * design.shoulderRatio -
+            design.neckLength * 0.5,
+        headBottom = baseY - design.totalHeight * design.headBottomRatio;
 
   final double foot;
   final double ankle;

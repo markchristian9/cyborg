@@ -539,6 +539,20 @@ pub struct Monster {
 
     #[default(1.0f32)]
     pub face_y: f32,
+
+    /// 마지막으로 **후려친** 시각.
+    ///
+    /// 서버가 피해를 판정해 체력을 깎기만 하면, 어느 화면에서도 몹이 때리는
+    /// 장면이 나오지 않는다 — 몹은 조용히 다가와 서 있고 사람의 체력만 줄어든다.
+    /// 무엇에 맞았는지 알 수 없으니 피할 수도, 도우러 갈 수도 없다.
+    ///
+    /// 값이 **바뀌는 것**을 보고 클라이언트가 타격 동작을 한 번 재생한다
+    /// ([`WorldPlayer::last_attack_at`] 과 같은 방식이다). 실제로 때린 틱에만
+    /// 쓰므로, 쫓아만 다니는 몹은 이 열을 건드리지 않는다.
+    ///
+    /// 맨 끝에 있고 기본값이 있어야 한다([`chunk`](Monster::chunk) 와 같은 이유).
+    #[default(Timestamp::UNIX_EPOCH)]
+    pub last_attack_at: Timestamp,
 }
 
 /// 바닥에 떨어진 전리품 하나.
@@ -949,6 +963,7 @@ pub fn bootstrap(ctx: &ReducerContext) {
                     // 추격에서 제 방향을 얻는다.
                     face_x: 0.0,
                     face_y: 1.0,
+                    last_attack_at: Timestamp::UNIX_EPOCH,
                     grid_x: x,
                     grid_y: y,
                     chunk: chunk_of(x, y),
@@ -1919,6 +1934,18 @@ pub fn monster_ai(ctx: &ReducerContext, _timer: MonsterAiTimer) {
             continue;
         }
 
+        // **후려친 사실을 남긴다.** 이것이 없으면 모든 화면에서 몹은 조용히
+        // 서 있고 사람의 체력만 줄어든다 — 무엇에 맞았는지 알 수 없다.
+        //
+        // 실제로 때린 틱에만 쓴다. 쫓아만 다니는 몹까지 매 틱 갱신하면 어그로
+        // 걸린 몹 수만큼 쓰기가 늘어나는데, 얻는 것은 아무것도 없다.
+        if let Some(fresh) = ctx.db.monster().id().find(monster.id) {
+            ctx.db.monster().id().update(Monster {
+                last_attack_at: ctx.timestamp,
+                ..fresh
+            });
+        }
+
         // 때린 사실만 모아 둔다. 실제 판정은 아래에서 한 번에 한다 — 여러 몹이
         // 같은 사람을 때렸을 때 방어·무적·사망을 각자 따로 계산하면 어긋난다.
         *hurt.entry(player.identity).or_insert(0) += level as i32;
@@ -2349,11 +2376,17 @@ fn award_kill(
         .find(owner_character_id)
     {
         if world_player.level != level {
+            // 마력 상한도 함께 올린다. 체력만 올리면 레벨이 오를수록 스킬을
+            // 쓸 수 있는 횟수가 상대적으로 줄어, 성장할수록 약해지는 축이
+            // 생긴다.
             let max_hp = max_hp_for_level(level);
+            let max_mp = max_mp_for_level(level);
             ctx.db.world_player().identity().update(WorldPlayer {
                 level,
                 max_hp,
                 hp: max_hp,
+                max_mp,
+                mp: max_mp,
                 ..world_player
             });
         }

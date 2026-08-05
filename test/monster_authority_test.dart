@@ -59,18 +59,28 @@ void main() {
     return client;
   }
 
-  /// 안전지대 밖에서 가장 가까운 살아 있는 몬스터.
+  /// 이 파일이 쓰는 사냥 구역의 기준점.
+  ///
+  /// **파일마다 다른 방향을 본다.** 통합 테스트들이 병렬로 돌면서 모두 "안전지대
+  /// 밖 가장 가까운 몹" 을 고르면 같은 한 마리에 몰려, 한쪽이 잡아 버린 몹을
+  /// 다른 쪽이 계속 기다리다 실패한다. 기능이 멀쩡한데 테스트만 깨진다.
+  const huntX = center;
+  const huntY = center - 120;
+
+  /// 안전지대 밖, 이 파일의 구역에서 가장 가까운 살아 있는 몬스터.
   Monster? nearestLiveMonster(SpacetimeDbClient client) {
     Monster? best;
     var bestD2 = double.infinity;
     for (final m in client.monster.iter()) {
       if (!m.alive) continue;
-      final dx = m.gridX - center;
-      final dy = m.gridY - center;
-      // 안전지대(중심 ±25) 에서 **넉넉히** 떨어진 몹이어야 한다. 경계에
-      // 붙은 몹을 고르면 그 앞에 선 플레이어가 아직 안전지대 안이고,
-      // 서버는 쉬는 곳까지 몹을 들이지 않으므로 추격이 일어나지 않는다.
-      if (dx.abs() < 40 && dy.abs() < 40) continue;
+      final dx = m.gridX - huntX;
+      final dy = m.gridY - huntY;
+      // 안전지대에서 **넉넉히** 떨어진 몹이어야 한다. 경계에 붙은 몹을 고르면
+      // 그 앞에 선 플레이어가 아직 안전지대 안이고, 서버는 쉬는 곳까지 몹을
+      // 들이지 않으므로 추격이 일어나지 않는다.
+      if ((m.gridX - center).abs() < 40 && (m.gridY - center).abs() < 40) {
+        continue;
+      }
       final d2 = dx * dx + dy * dy;
       if (d2 < bestD2) {
         bestD2 = d2;

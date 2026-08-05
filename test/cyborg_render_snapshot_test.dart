@@ -33,9 +33,16 @@ void main() {
       expect(sheet.width, greaterThan(0));
       await _save(sheet, outputDir, 'cyborg_rotation.png');
 
-      // 게임 최소 배율. 이 크기에서 실루엣이 읽히는지 본다.
+      // 기본 상태의 하한 배율. 캐릭터 108px 가 약 59px 이 된다.
       final tiny = await _renderRotationSheet(steps: 16, scale: 0.55);
       await _save(tiny, outputDir, 'cyborg_rotation_min_zoom.png');
+
+      // 사용자가 축소를 끝까지 눌렀을 때의 실효 배율.
+      // `_zoomForSize()` 가 `clamp(0.55, 1.6) * _zoomScale` 이고 `_zoomScale`
+      // 하한이 0.5 라, 실제로는 0.275 까지 내려간다 — 캐릭터가 약 30px 이다.
+      // 이 시트에서 사라지는 디테일은 그 상태에서는 없는 것과 같다.
+      final micro = await _renderRotationSheet(steps: 16, scale: 0.275);
+      await _save(micro, outputDir, 'cyborg_rotation_micro_zoom.png');
 
       // 보행 위상까지 섞어 다리·팔이 각도별로 어떻게 움직이는지 본다.
       final walk = await _renderRotationSheet(

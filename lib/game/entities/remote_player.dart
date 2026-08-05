@@ -4,12 +4,14 @@ import 'package:flame/components.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../audio/game_audio.dart';
 import '../iso.dart';
 import '../net/world_presence.dart';
 import '../palette.dart';
 import 'cyborg_design.dart';
 import 'cyborg_renderer.dart';
 import 'iso_entity.dart';
+import 'projectile.dart';
 
 /// 같은 월드에 있는 **다른 요원**의 몸.
 ///
@@ -164,6 +166,18 @@ class RemotePlayerEntity extends IsoEntity {
         // 노렸는지 알 수 없다.
         final dir = snapshot.attackDir;
         if (dir.length2 > 0.0001) _renderYaw = _yawFor(dir);
+
+        // **원거리 스킬은 탄이 날아가는 것이 보여야 한다.** 아크만 그리면 옆
+        // 사람이 무엇을 하는지 알 수 없고, 먼 곳의 몹이 이유 없이 죽는다.
+        //
+        // 피해는 넣지 않는다 — 판정은 서버가 이미 끝냈고 이것은 결과를 그리는
+        // 연출이다. 서버 몹은 `isServerJudged` 로 걸러지지만, 그에 기대지 않고
+        // 피해를 0 으로 둔다. 남의 탄이 내 화면에서 무언가를 깎으면 그 순간
+        // 두 화면이 갈라진다.
+        if (snapshot.attackSkill == AttackSkill.plasma &&
+            dir.length2 > 0.0001) {
+          _spawnRemoteBolt(dir);
+        }
       }
       _playedAttackAt = attackAt;
     }
@@ -176,7 +190,15 @@ class RemotePlayerEntity extends IsoEntity {
   }
 
   /// 새 서버 좌표를 받아 보간 구간을 연다.
+  ///
+  /// **같은 좌표가 다시 오면 아무것도 하지 않는다.** 게임 루프는 서버 갱신과
+  /// 무관하게 매 프레임 스냅샷을 밀어 넣으므로, 올 때마다 구간을 다시 열면
+  /// 지나온 시간이 매번 0 으로 돌아가 진행도가 영영 한 프레임분에 머문다.
+  /// 그러면 남은 거리에 비례해 다가가는 꼴이 되어, 등속 보간이 우리가 걷어낸
+  /// 지수 감쇠로 그대로 퇴화한다 — 화면에서는 다시 뚝뚝 끊긴다.
   void _beginSegment(Vector2 serverGrid) {
+    if ((_segTo - serverGrid).length2 < 1e-6) return;
+
     final now = DateTime.now();
     final last = _lastServerAt;
     _lastServerAt = now;
@@ -235,6 +257,26 @@ class RemotePlayerEntity extends IsoEntity {
     }
 
     super.update(dt);
+  }
+
+  /// 남이 쏜 플라즈마 볼트. **연출 전용이다.**
+  ///
+  /// 발사한 본인 화면과 같은 속도·높이로 그려야 같은 장면이 된다. 다만 지연
+  /// 때문에 이미 판정이 끝난 뒤에 날아가므로, 대상이 먼저 쓰러지고 탄이 그
+  /// 자리를 지나가는 순간이 있을 수 있다 — 판정을 늦추는 것보다 낫다.
+  void _spawnRemoteBolt(Vector2 direction) {
+    game.spawnProjectile(
+      Projectile(
+        grid: grid + direction * 0.4,
+        direction: direction,
+        speed: 9.5,
+        // 남의 탄은 내 화면에서 아무것도 깎지 않는다.
+        damage: 0,
+        owner: ProjectileOwner.player,
+        z: 0.62,
+      ),
+    );
+    GameAudio.play(Sfx.plasmaShot, at: grid, volumeScale: 0.6);
   }
 
   /// 공격 동작의 팔 각도.

@@ -607,6 +607,12 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 마지막으로 본 서버 사망 누계. 이 수가 오르면 쓰러진 것이다.
   int? _lastServerDeaths;
 
+  /// 마지막으로 **연출한** 피격의 서버 시각(마이크로초).
+  ///
+  /// 첫 갱신에서는 재생하지 않는다 — 접속하자마자 옛 피격이 되살아나는 것을
+  /// 막기 위해서다(사망 누계를 다루는 방식과 같다).
+  int? _lastServerHurtAt;
+
   /// 서버가 확정한 내 체력·마력·좌표를 화면에 반영한다.
   ///
   /// **이 게임의 판정은 서버에 있다.** 클라이언트가 하는 일은 그 결과를 그리고,
@@ -616,12 +622,24 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     final state = presence.me;
     if (state == null) return;
 
+    // 맞았는지는 **시각으로** 안다. 체력 숫자의 감소만 보면 회복과 구별되지
+    // 않고, 사망 재가동의 체력 리셋까지 피격으로 오인한다.
+    final hurtAt = state.lastDamagedAtMicros;
+    final wasHurt = _lastServerHurtAt != null && hurtAt > _lastServerHurtAt!;
+    final beforeHp = player.hp;
+    _lastServerHurtAt = hurtAt;
+
     player.adoptServerVitals(
       hp: state.hp,
       maxHp: state.maxHp,
       mp: state.mp,
       maxMp: state.maxMp,
     );
+
+    // 체력 대입 **뒤에** 낸다. 깎인 폭을 알아야 숫자를 띄울 수 있고, 그 폭은
+    // 서버 값이 들어온 뒤라야 나온다. 재가동으로 체력이 차오른 경우는 음수가
+    // 되므로 숫자 없이 흔들림만 남는다.
+    if (wasHurt) player.playHurtReaction(beforeHp - player.hp);
 
     // 사망은 상태가 아니라 사건이다 — 쓰러지면 서버가 곧바로 안전지대에서
     // 다시 일으켜 세우므로 `alive` 가 내려가 있는 순간을 구독으로 보지 못한다.
@@ -635,6 +653,26 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 좌표는 즉시 대입하지 않고 당긴다. 즉시 대입하면 서버가 보내는 간격마다
     // 화면이 끊겨 보이고, 내 입력이 매번 뒤로 밀린다.
     player.reconcileServerGrid(state.grid, dt);
+
+    _adoptServerGrowth();
+  }
+
+  /// 서버가 올려 준 성장을 화면에 옮긴다.
+  ///
+  /// **서버 몹의 경험치는 서버에서만 오른다.** 클라이언트가 같은 킬에 또 주면
+  /// 두 배가 되고, 크레딧이 선점자에게 가므로 가로챈 쪽까지 받게 된다. 그래서
+  /// 로컬 지급을 막아 두었는데, 그 결과 **화면의 레벨과 경험치 바가 출격 시점에
+  /// 멈춰 있었다** — 리더보드만 오르고 내 화면은 그대로인 상태다.
+  ///
+  /// 서버 쪽이 앞설 때만 그 차이를 채운다. 뒤처져 있으면 두지 않는다 —
+  /// 오프라인에서 번 몫이 아직 서버에 닿지 않은 것이고, 그것은 진행 보고가
+  /// 따로 올린다.
+  void _adoptServerGrowth() {
+    final serverXp = presence.serverTotalXp;
+    if (serverXp == null) return;
+    final gap = serverXp - player.totalXp;
+    if (gap <= 0) return;
+    player.gainXp(gap);
   }
 
   /// 서버가 "쓰러졌다" 고 알려 왔을 때의 연출.
@@ -1277,6 +1315,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
           alive: snapshot.alive,
           tagged: snapshot.taggedByMe,
           facing: snapshot.facing,
+          lastAttackAtMicros: snapshot.lastAttackAtMicros,
         );
         continue;
       }
@@ -1295,6 +1334,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         alive: snapshot.alive,
         tagged: snapshot.taggedByMe,
         facing: snapshot.facing,
+        lastAttackAtMicros: snapshot.lastAttackAtMicros,
       );
       _activeMonsters[snapshot.id] = enemy;
       enemies.add(enemy);
@@ -1408,10 +1448,41 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   List<Damageable> projectileTargetsForPlayer() => _damageableTargets();
 
   /// 지금 살아 있는 피격 대상 전부를 복사해 담는다.
+  ///
+  /// **다른 요원은 여기 들어오지 않는다.** PK 는 허용되지만, 남의 몸을 로컬에서
+  /// 깎으면 그 순간 두 화면이 갈라진다 — 서버가 안전지대나 사거리로 거절해도
+  /// 내 화면에서는 이미 피가 깎여 있다. 사람을 치는 것은 [remoteTargetInArc] 로
+  /// 골라 **의도만 서버에 보낸다.**
   List<Damageable> _damageableTargets() => <Damageable>[
         ...enemies.where((enemy) => enemy.isAlive),
         ..._destructibles.where((block) => block.isAlive),
       ];
+
+  /// 근접 사거리와 부채꼴 안에 있는, 가장 가까운 다른 요원의 캐릭터 번호.
+  ///
+  /// 없으면 `null`. 여럿이면 하나만 고른다 — 서버 쿨다운이 어차피 한 번만
+  /// 받아들이므로, 여러 요청을 보내면 누가 맞을지가 도착 순서에 좌우된다.
+  int? remoteTargetInArc(Vector2 origin, Vector2 direction, double range) {
+    int? best;
+    var bestDistance = double.infinity;
+    for (final entry in _remotePlayers.entries) {
+      final other = entry.value;
+      if (!other.alive) continue;
+      final toTarget = other.grid - origin;
+      final distance = toTarget.length;
+      if (distance > range + other.bodyRadius) continue;
+      if (distance > 0.001) {
+        // 근접 판정과 같은 전방 120도 부채꼴을 쓴다. 규칙이 갈라지면 몹은
+        // 맞는데 사람은 안 맞는 각도가 생긴다.
+        if (toTarget.normalized().dot(direction) < 0.35) continue;
+      }
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = entry.key;
+      }
+    }
+    return best;
+  }
 
   // ── 전리품 드롭 ─────────────────────────────────────────────────────
 

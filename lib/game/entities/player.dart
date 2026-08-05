@@ -588,6 +588,16 @@ class Player extends IsoEntity with Damageable {
       );
     }
 
+    // **PK.** 같은 스윙이 사람에게도 닿는다. 피해는 여기서 넣지 않는다 —
+    // 안전지대 면역·사거리·쿨다운을 서버가 보고, 거절되면 아무 일도 일어나지
+    // 않아야 한다. 로컬에서 미리 깎으면 서버가 거절한 공격이 내 화면에서만
+    // 명중해, 같은 싸움을 두 사람이 다르게 보게 된다.
+    final pkTarget = game.remoteTargetInArc(grid, dir, meleeRange);
+    if (pkTarget != null) {
+      game.presence.attackPlayer(pkTarget);
+      hitAny = true;
+    }
+
     if (hitAny) {
       game.shakeCamera(_comboStep == 2 ? 8 : 4, 0.12);
       energy = math.min(maxEnergy, energy + 4);
@@ -798,6 +808,36 @@ class Player extends IsoEntity with Damageable {
     _hp = hp.toDouble().clamp(0, _maxHp);
     _maxMp = maxMp.toDouble();
     this.mp = mp.toDouble().clamp(0, _maxMp);
+  }
+
+  /// 서버가 때린 결과를 **연출로만** 재생한다.
+  ///
+  /// 체력은 건드리지 않는다 — 그건 이미 [adoptServerVitals] 가 서버 값으로
+  /// 맞췄다. 여기서 또 깎으면 같은 피해를 두 번 먹는다.
+  ///
+  /// 이 함수가 필요한 이유는, 서버 판정으로 옮기면서 **맞는 장면이 통째로
+  /// 사라졌기** 때문이다. 로컬 판정 시절에는 [applyDamage] 가 숫자·흔들림·
+  /// 소리를 함께 냈는데, 서버가 판정하게 되자 남은 것은 게이지가 조용히
+  /// 줄어드는 것뿐이었다. 무엇에 맞았는지도, 맞긴 맞았는지도 알 수 없다.
+  void playHurtReaction(double taken) {
+    if (!isAlive) return;
+
+    if (taken > 0) {
+      game.spawnEffect(
+        DamageText(
+          grid: grid.clone(),
+          z: 1.0,
+          amount: taken,
+          color: GamePalette.hpFillLow,
+        ),
+      );
+    }
+    game.shakeCamera(9, 0.2);
+    game.onPlayerDamaged();
+    GameAudio.play(
+      Sfx.playerHurt,
+      volumeScale: (0.5 + taken / (_maxHp * 0.02)).clamp(0.5, 1.2),
+    );
   }
 
   /// 서버가 확정한 좌표로 예측 위치를 끌어당긴다.

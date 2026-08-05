@@ -286,6 +286,7 @@ class SpacetimeWorldPresence extends WorldPresence {
           alive: row.alive,
           taggedByMe: mine != null && row.taggedBy?.toInt() == mine,
           facing: Vector2(row.faceX, row.faceY),
+          lastAttackAtMicros: row.lastAttackAt.toInt(),
         ),
     ];
   }
@@ -380,7 +381,18 @@ class SpacetimeWorldPresence extends WorldPresence {
       maxMp: row.maxMp,
       alive: row.alive,
       deaths: row.deaths,
+      lastDamagedAtMicros: row.lastDamagedAt.toInt(),
     );
+  }
+
+  @override
+  int? get serverTotalXp {
+    final id = _myCharacterId;
+    if (id == null) return null;
+    for (final row in _client.myCharacters.iter()) {
+      if (row.id.toInt() == id) return row.totalXp;
+    }
+    return null;
   }
 
   @override
