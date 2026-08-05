@@ -1,2 +1,21 @@
 #include "../../Flutter/Flutter-Release.xcconfig"
 #include "Warnings.xcconfig"
+
+// ── 배포용 서명 ─────────────────────────────────────────────────────────
+// ad-hoc 서명("-")으로 만든 앱은 만든 기계에서만 열린다. 다른 사람에게 보내면
+// 내려받는 순간 격리(quarantine) 딱지가 붙고, Gatekeeper 가 서명을 확인하지 못해
+// "손상되었기 때문에 열 수 없습니다. 휴지통으로 이동하십시오" 라고 막아 버린다.
+//
+// App Store 밖으로 앱을 건네주려면 Developer ID 인증서로 서명하고 Apple 에
+// 공증(notarization)까지 받아야 한다. 서명은 여기서, 공증은 배포 스크립트
+// (scripts/release-macos.sh)에서 맡는다.
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = Developer ID Application
+DEVELOPMENT_TEAM = AX352BQR6K
+PROVISIONING_PROFILE_SPECIFIER =
+
+// 공증의 전제 조건. 켜 두지 않으면 Apple 이 공증 자체를 거절한다.
+ENABLE_HARDENED_RUNTIME = YES
+
+// 공증에는 Apple 타임스탬프 서버가 찍어 준 시각이 함께 들어가야 한다.
+OTHER_CODE_SIGN_FLAGS = $(inherited) --timestamp
