@@ -10,15 +10,17 @@ class _FakeParty extends PartySession {
   _FakeParty({
     this.selfId,
     this.leaderId,
-    List<PartyMemberInfo> members = const [],
-    List<PartyInviteInfo> invites = const [],
-  })  : _members = members,
-        _invites = invites;
+    this.memberList = const [],
+    this.inviteList = const [],
+  });
 
   final int? selfId;
   final int? leaderId;
-  final List<PartyMemberInfo> _members;
-  final List<PartyInviteInfo> _invites;
+
+  // 이름이 `members`·`invites` 가 아닌 것은 그쪽을 getter 로 덮어써야 하기
+  // 때문이다. 필드와 getter 가 같은 이름일 수는 없다.
+  final List<PartyMemberInfo> memberList;
+  final List<PartyInviteInfo> inviteList;
 
   @override
   int? get selfCharacterId => selfId;
@@ -30,10 +32,10 @@ class _FakeParty extends PartySession {
   bool get inParty => leaderId != null;
 
   @override
-  List<PartyMemberInfo> get members => _members;
+  List<PartyMemberInfo> get members => memberList;
 
   @override
-  List<PartyInviteInfo> get invites => _invites;
+  List<PartyInviteInfo> get invites => inviteList;
 
   @override
   Listenable get changes => Listenable.merge(const []);
@@ -70,7 +72,7 @@ void main() {
       final party = _FakeParty(
         selfId: 5,
         leaderId: 9,
-        members: [_member(9, leader: true), _member(5, following: 9)],
+        memberList: [_member(9, leader: true), _member(5, following: 9)],
       );
       expect(party.isFollowing, isTrue);
     });
@@ -79,7 +81,7 @@ void main() {
       final party = _FakeParty(
         selfId: 5,
         leaderId: 9,
-        members: [_member(9, leader: true), _member(7, following: 9), _member(5)],
+        memberList: [_member(9, leader: true), _member(7, following: 9), _member(5)],
       );
       expect(party.isFollowing, isFalse);
     });
@@ -88,7 +90,7 @@ void main() {
       final party = _FakeParty(
         selfId: 5,
         leaderId: 9,
-        members: [_member(9, leader: true)],
+        memberList: [_member(9, leader: true)],
       );
       expect(party.isFollowing, isFalse);
     });
@@ -104,7 +106,7 @@ void main() {
       final party = _FakeParty(
         selfId: 1,
         leaderId: 1,
-        members: [for (var i = 0; i < kMaxPartySize; i++) _member(i)],
+        memberList: [for (var i = 0; i < kMaxPartySize; i++) _member(i)],
       );
       expect(party.isFull, isTrue);
     });
@@ -113,7 +115,7 @@ void main() {
       final party = _FakeParty(
         selfId: 1,
         leaderId: 1,
-        members: [for (var i = 0; i < kMaxPartySize - 1; i++) _member(i)],
+        memberList: [for (var i = 0; i < kMaxPartySize - 1; i++) _member(i)],
       );
       expect(party.isFull, isFalse);
     });
