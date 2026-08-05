@@ -65,14 +65,75 @@ class Enemy extends IsoEntity with Damageable {
   /// 웨이브로 투입된 추적대는 상주 개체가 아니므로 null이다.
   MonsterSeed? seed;
 
+  /// 서버가 관리하는 개체라면 그 번호.
+  ///
+  /// 값이 있으면 **이 몹의 진실은 전부 서버에 있다.** 체력도 생사도 위치도
+  /// 서버가 정하고, 이 컴포넌트는 그것을 그리기만 한다. 로컬에서 판정하면
+  /// A 가 잡은 몹이 B 화면에 살아 있게 되어 "하나의 월드" 가 깨진다.
+  int? serverId;
+
+  /// 서버가 모는 개체인지.
+  bool get isServerDriven => serverId != null;
+
+  /// 서버가 모는 개체의 피해는 서버가 판정한다.
+  ///
+  /// 이 값이 참이면 **화면에서 무엇이 닿았든 그것만으로는 아무것도 깎이지 않는다.**
+  /// 발사체처럼 이미 서버 판정이 끝난 뒤에 날아가는 연출이 또 공격을 보내는 것을
+  /// 막는 데 쓴다([`Damageable.isServerJudged`]).
+  @override
+  bool get isServerJudged => isServerDriven;
+
+  /// 서버가 알려 준 체력 비율. 로컬 계산을 쓰지 않는다.
+  double _serverHpRatio = 1;
+
+  /// 서버가 알려 준 생사.
+  bool _serverAlive = true;
+
+  /// 내가 선점한 몹인지. 크레딧이 나에게 오는지 색으로 알린다.
+  bool taggedByMe = false;
+
+  /// 서버가 알려 준 목표 좌표. 여기를 향해 미끄러진다.
+  ///
+  /// 받은 좌표로 곧바로 옮기지 않는 이유가 있다. 서버 AI 는 0.3 초마다 도는데
+  /// 그 값을 즉시 반영하면 몹이 초당 세 번 순간이동하듯 튄다. 목표를 향해
+  /// 보간하면 같은 데이터로도 걸어오는 것처럼 보인다 — 화면을 부드럽게 하려는
+  /// 것이지 판정을 흉내 내는 것이 아니다. 사거리·피해는 언제나 서버가 정한다.
+  Vector2? _serverTarget;
+
+  /// 서버가 보낸 상태를 반영한다. 서버가 모는 개체에만 쓴다.
+  void applyServerState({
+    required Vector2 grid,
+    required double hpRatio,
+    required bool alive,
+    required bool tagged,
+  }) {
+    (_serverTarget ??= Vector2.zero()).setFrom(grid);
+    if (hpRatio < _serverHpRatio) {
+      // 남이 때린 것도 여기로 온다. 누가 때렸든 같은 연출이 나와야 여럿이
+      // 함께 때리는 것이 화면에서 읽힌다.
+      _hitFlash = 1;
+      _healthBarTimer = 2.5;
+    }
+    _serverHpRatio = hpRatio;
+    _serverAlive = alive;
+    taggedByMe = tagged;
+  }
+
   late final double _maxHp;
   late double _hp;
 
   @override
-  double get hp => _hp;
+  double get hp => isServerDriven ? _maxHp * _serverHpRatio : _hp;
 
   @override
   double get maxHp => _maxHp;
+
+  /// 서버가 모는 개체의 생사는 서버가 정한다.
+  ///
+  /// 체력 비율로도 유추할 수 있지만, 되살아나는 순간(체력이 가득 찬 채로
+  /// `alive` 만 바뀌는 경우)을 놓치지 않으려면 서버가 보낸 값을 그대로 쓴다.
+  @override
+  bool get isAlive => isServerDriven ? _serverAlive : hp > 0;
 
   EnemyPhase phase = EnemyPhase.idle;
 
@@ -136,6 +197,15 @@ class Enemy extends IsoEntity with Damageable {
     if (_hitFlash > 0) _hitFlash = math.max(0, _hitFlash - dt * 3.5);
     if (_healthBarTimer > 0) _healthBarTimer -= dt;
 
+    // 서버가 모는 개체는 스스로 판단하지 않는다. 위치도 체력도 서버가 정하고
+    // 여기서는 맞은 연출만 흐른다. 로컬 AI 를 돌리면 화면마다 다른 곳으로
+    // 움직여, 같은 몹을 함께 때리는 일이 성립하지 않는다.
+    if (isServerDriven) {
+      _followServer(dt);
+      super.update(dt);
+      return;
+    }
+
     if (!isAlive) {
       super.update(dt);
       return;
@@ -144,6 +214,37 @@ class Enemy extends IsoEntity with Damageable {
     _updateAi(dt);
     _applyKnockback(dt);
     super.update(dt);
+  }
+
+  /// 서버가 준 목표를 향해 미끄러진다.
+  ///
+  /// 화면을 부드럽게 하려는 것이지 판정을 흉내 내는 것이 아니다. 사거리·피해는
+  /// 언제나 서버가 정하고, 여기서 계산한 위치는 그리기에만 쓴다.
+  void _followServer(double dt) {
+    final target = _serverTarget;
+    if (target == null) return;
+
+    final delta = target - grid;
+    final distance = delta.length;
+
+    if (distance > 8) {
+      // 리스폰처럼 멀리 옮겨진 경우다. 월드를 가로질러 미끄러지는 모습이
+      // 더 이상하므로 곧바로 옮긴다.
+      grid.setFrom(target);
+      phase = EnemyPhase.idle;
+      return;
+    }
+
+    if (distance <= 0.02) {
+      phase = EnemyPhase.idle;
+      return;
+    }
+
+    // 보고 간격(0.3초)보다 조금 빠르게 따라붙어야 다음 보고가 오기 전에
+    // 목표에 닿아 멈칫거리지 않는다.
+    grid.addScaled(delta, math.min(1, dt * 8));
+    facing.setFrom(delta.normalized());
+    phase = EnemyPhase.chase;
   }
 
   void _updateAi(double dt) {
@@ -336,6 +437,17 @@ class Enemy extends IsoEntity with Damageable {
   @override
   void applyDamage(double amount, {Vector2? knockback, bool critical = false}) {
     if (!isAlive) return;
+
+    // 서버가 모는 개체는 **여기서 체력을 깎지 않는다.** 때렸다는 사실만 서버에
+    // 알리고, 얼마나 깎였는지는 서버가 정해 표로 돌려준다. 로컬에서 미리 깎으면
+    // 서버가 거절했을 때(사거리 밖·쿨다운) 화면과 서버가 어긋나고, 그 어긋남은
+    // "분명히 때렸는데 안 죽는" 형태로 나타난다.
+    if (isServerDriven) {
+      game.presence.attack(serverId!);
+      GameAudio.play(Sfx.robotHit, at: grid);
+      return;
+    }
+
     _hp = math.max(0, _hp - amount);
     _hitFlash = 1;
     _healthBarTimer = 2.5;

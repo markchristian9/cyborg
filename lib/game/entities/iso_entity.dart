@@ -75,6 +75,16 @@ mixin Damageable on IsoEntity {
   double get maxHp;
   bool get isAlive => hp > 0;
 
+  /// 이 대상의 피해를 **서버가 판정하는지**.
+  ///
+  /// 참이면 화면에서 무엇이 닿았든 그것만으로는 아무것도 깎이지 않는다. 판정은
+  /// 서버가 자기 좌표로 이미 했거나 곧 하며, 결과는 표가 바뀌는 것으로 돌아온다.
+  ///
+  /// 이 구분이 필요한 이유는 **같은 타격이 두 번 서버로 나가는 것을 막기 위해서**다.
+  /// 예컨대 플라즈마는 쏘는 순간 서버 스킬로 판정이 끝나는데, 날아간 발사체가
+  /// 몹에 닿았다고 또 공격을 보내면 한 발에 두 번의 요청이 나간다.
+  bool get isServerJudged => false;
+
   /// [amount]만큼 피해를 입힌다. [knockback]은 그리드 단위 밀려나는 방향/세기다.
   void applyDamage(double amount, {Vector2? knockback, bool critical = false});
 }

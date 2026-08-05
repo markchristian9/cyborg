@@ -88,10 +88,18 @@ class Projectile extends IsoEntity {
       if (!target.isAlive) continue;
       final distance = (target.grid - grid).length;
       if (distance <= radius + target.bodyRadius) {
-        target.applyDamage(
-          damage,
-          knockback: direction * (owner == ProjectileOwner.player ? 1.4 : 2.2),
-        );
+        // 서버가 판정하는 대상에게는 피해를 넣지 않는다. **이 발사체는 이미
+        // 판정이 끝난 스킬의 연출**이다 — 쏘는 순간 서버가 마력·사거리·피해를
+        // 정했고, 여기서 또 때렸다고 알리면 한 발에 두 번의 요청이 나간다.
+        // 그 두 번째 요청은 근접 공격으로 취급되어(사거리 2.2 타일) 대부분
+        // 거절되지만, 통과하면 쿨다운을 잡아먹어 다음 평타가 막힌다.
+        if (!target.isServerJudged) {
+          target.applyDamage(
+            damage,
+            knockback:
+                direction * (owner == ProjectileOwner.player ? 1.4 : 2.2),
+          );
+        }
         _burst();
         return;
       }

@@ -163,6 +163,9 @@ class Player extends IsoEntity with Damageable {
   int _comboStep = 0;
   double _comboWindow = 0;
   bool _meleeHitApplied = false;
+
+  /// 이번 스윙이 지목한 대상. null 이면 앞의 모든 것을 벤다.
+  Enemy? _meleeTarget;
   final List<_DashGhost> _ghosts = [];
 
   static const double _meleeDuration = 0.32;
@@ -183,8 +186,18 @@ class Player extends IsoEntity with Damageable {
   // ── 입력 진입점 ─────────────────────────────────────────────────────
 
   /// 근접 공격(에너지 블레이드)을 시도한다.
-  void tryMelee() {
+  ///
+  /// [target] 을 주면 **그 대상만** 판정한다. 자동 사냥처럼 "이 몹을 잡는다"
+  /// 가 분명한 호출자를 위한 것이다. 서버가 모는 몹은 타격 한 번이 reducer
+  /// 한 번이라, 옆에 선 몹까지 훑으면 그만큼 요청이 나가고 서버는 공격
+  /// 쿨다운으로 첫 건 말고 전부 거절한다 — 사람과 달리 쉬지 않고 휘두르는
+  /// 자동 사냥에서는 그 낭비가 끝없이 쌓인다.
+  ///
+  /// 주지 않으면 기존대로 전방 부채꼴을 훑는다. 손으로 휘두르는 칼은 눈앞의
+  /// 것을 한꺼번에 베는 맛이 있어야 하므로 수동 조작은 그대로 둔다.
+  void tryMelee({Enemy? target}) {
     if (!isAlive || _meleeCooldown > 0 || isDashing) return;
+    _meleeTarget = target;
     _comboStep = _comboWindow > 0 ? (_comboStep + 1) % 3 : 0;
     _comboWindow = 0.65;
     _meleeTimer = _meleeDuration;
@@ -228,26 +241,40 @@ class Player extends IsoEntity with Damageable {
 
     // 대상을 지목하지 않았으면 바라보는 쪽에서 찾는다. 조준은 조작 편의이고,
     // 사거리·명중 여부는 어차피 서버가 자기 좌표로 다시 본다.
-    final monsterId = (target ?? _aimTarget())?.serverId;
+    final aimed = target ?? _aimTarget();
+    final monsterId = aimed?.serverId;
     if (monsterId != null) {
       // 서버가 마력·쿨다운·사거리·피해를 판정한다. 거절당하면 마력은 줄지 않고,
       // 화면의 마력 바는 다음 갱신에서 제자리로 돌아온다.
       game.presence.castSkill(plasmaSkillId, monsterId);
+
+      // 서버 답이 오기 전까지의 표시용 예측. 다음 갱신이 서버 값으로 덮는다.
+      // 이걸 빼면 연타할 때 마력 바가 한 박자 늦게 줄어 "쐈는데 안 줄었다" 로
+      // 보인다. 서버에 보내지 못했으면(대상 없음) 깎지 않는다 — 서버는 마력을
+      // 쓰지 않았는데 화면만 줄어들면 다음 갱신에 되돌아와 눈에 띄게 튄다.
+      mp = math.max(0, mp - plasmaMpCost);
+    } else if (!game.presence.isAvailable) {
+      // 오프라인에서는 여기가 유일한 소비 지점이다.
+      mp = math.max(0, mp - plasmaMpCost);
     }
 
-    // 서버 답이 오기 전까지의 표시용 예측. 다음 갱신이 서버 값으로 덮는다.
-    // 이걸 빼면 연타할 때 마력 바가 한 박자 늦게 줄어 "쐈는데 안 줄었다" 로 보인다.
-    mp = math.max(0, mp - plasmaMpCost);
+    // 볼트는 **조준한 쪽으로** 날아간다. 바라보는 방향으로만 쏘면 서버에 보낸
+    // 대상과 화면의 궤적이 갈라져, 옆에 선 적이 맞는 것처럼 보인다.
+    final dir = aimed != null && (aimed.grid - grid).length2 > 0.0001
+        ? (aimed.grid - grid).normalized()
+        : (facing.clone()..normalize());
+    // 총구가 궤적을 따라가야 쏘는 자세와 날아가는 방향이 어긋나지 않는다.
+    facing.setFrom(dir);
 
-    final dir = facing.clone()..normalize();
     game.spawnProjectile(
       Projectile(
         grid: grid + dir * 0.4,
         direction: dir,
         speed: 9.5,
-        // 서버가 판정하는 동안 화면에서만 도는 연출이다. 서버에 붙어 있으면
-        // 이 값으로 몹의 체력이 깎이지 않는다(`Projectile` 이 서버 몹을 건드리지
-        // 않는다). 오프라인 모드에서는 이것이 유일한 피해다.
+        // 서버에 붙어 있으면 이 값으로는 아무것도 깎이지 않는다 — 판정은 위
+        // `castSkill` 에서 이미 끝났고, 이 볼트는 그 결과를 그리는 연출이다.
+        // 서버 몹은 `Damageable.isServerJudged` 로 걸러진다. 오프라인 모드에서는
+        // 이것이 유일한 피해다.
         damage: effectiveRangedDamage,
         owner: ProjectileOwner.player,
         z: 0.62,
@@ -526,7 +553,14 @@ class Player extends IsoEntity with Damageable {
     final damage = effectiveMeleeDamage * comboBonus;
     var hitAny = false;
 
-    for (final target in game.meleeTargets()) {
+    // 지목된 대상이 있으면 그것만 본다. 사거리·부채꼴 판정은 그대로 거치므로,
+    // 지목했다고 닿지 않는 자리에서 서버에 요청이 나가지는 않는다.
+    final focused = _meleeTarget;
+    final candidates =
+        focused != null ? <Damageable>[focused] : game.meleeTargets();
+    _meleeTarget = null;
+
+    for (final target in candidates) {
       // 목록은 스냅샷이다. 앞선 대상을 때려 죽인 뒤에도 계속 돌기 때문에,
       // 이미 쓰러진 대상은 여기서 걸러야 시체에 타격 이펙트가 남지 않는다.
       if (!target.isAlive) continue;
@@ -696,6 +730,9 @@ class Player extends IsoEntity with Damageable {
     _comboStep = 0;
     _comboWindow = 0;
     _meleeHitApplied = true;
+    // 중단된 스윙이 노리던 몹은 여기 두고 간다. 그러지 않으면 사라진 개체를
+    // 계속 붙들고 있게 된다.
+    _meleeTarget = null;
     _hazardTick = 0;
     _invulnerable = respawnInvulnerability;
 
@@ -732,6 +769,9 @@ class Player extends IsoEntity with Damageable {
     _comboStep = 0;
     _comboWindow = 0;
     _meleeHitApplied = true;
+    // 중단된 스윙이 노리던 몹은 여기 두고 간다. 그러지 않으면 사라진 개체를
+    // 계속 붙들고 있게 된다.
+    _meleeTarget = null;
     // 밟고 있던 유해 지형의 누적을 새 지형으로 끌고 가지 않는다.
     _hazardTick = 0;
 
