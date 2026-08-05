@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flame/components.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -82,6 +84,52 @@ void main() {
       drawn.every((e) => e.isServerDriven),
       isTrue,
       reason: '서버 몹인데 로컬 AI 로 도는 몸이 섞였다',
+    );
+  });
+
+  test('조밀한 사냥터에서도 화면 안 몹은 전부 그린다', () async {
+    // 실측: 가장 조밀한 저레벨 사냥터는 화면 반폭(약 22 타일) 안에만 66 기가
+    // 있다. 표시 상한이 그보다 낮으면 눈앞의 몹이 그려지지 않아 화면이 성기게
+    // 비어 보인다 — "몬스터가 투명하다" 로 읽히던 증상이다.
+    final game = ActionRpgGame(presence: _FakePresence([]), autoStart: true);
+    game.onGameResize(Vector2(1280, 800));
+    await game.onLoad();
+    for (final joystick
+        in game.descendants().whereType<JoystickComponent>().toList()) {
+      joystick.removeFromParent();
+    }
+
+    // 플레이어 둘레 반경 12 타일 안에 80 기를 촘촘히 세운다. 이 범위는 어떤
+    // 배율에서도 화면 안이다.
+    final origin = game.player.grid;
+    final monsters = <ServerMonster>[];
+    for (var i = 0; i < 80; i++) {
+      final angle = i * 2.399963; // 황금각 — 고르게 흩어진다
+      final radius = 2.0 + (i % 10);
+      monsters.add(
+        ServerMonster(
+          id: 5000 + i,
+          level: 1 + i % 5,
+          grid: origin +
+              Vector2(math.cos(angle) * radius, math.sin(angle) * radius),
+          hp: 100,
+          maxHp: 100,
+          alive: true,
+          taggedByMe: false,
+        ),
+      );
+    }
+    (game.presence as _FakePresence)._monsters.addAll(monsters);
+
+    for (var i = 0; i < 30; i++) {
+      game.update(1 / 60);
+    }
+
+    final drawn = game.world.children.whereType<Enemy>().length;
+    expect(
+      drawn,
+      greaterThanOrEqualTo(80),
+      reason: '화면 안 몹 80 기 중 $drawn 기만 그렸다 — 표시 상한이 화면을 굶긴다',
     );
   });
 

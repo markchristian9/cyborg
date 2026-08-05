@@ -212,7 +212,12 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
   /// 이 거리보다 멀어지면 다시 잠재운다. 경계에서 깜빡이지 않도록 활성
   /// 반경보다 넓게 둔다.
-  static const double _monsterReleaseRadius = 60;
+  ///
+  /// **화면보다 조금만 넓게 잡는다.** 예전에는 60 이었는데, 그 반경이 화면
+  /// 반폭(약 22 타일)의 세 배에 가까워 눈에 보이지도 않는 몹이 마릿수 상한을
+  /// 먼저 채웠다. 조밀한 저레벨 사냥터에서는 그 결과 **눈앞의 몹이 그려지지
+  /// 않아 화면이 비어 보였다**(실측: 화면 반폭 안에만 66 기).
+  static const double _monsterReleaseRadius = 34;
 
   /// 동시에 살아 움직일 수 있는 상주 로봇의 상한.
   ///
@@ -220,8 +225,13 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 마릿수를 자르지 못한다 — 구독 SQL 에 `LIMIT` 이 없고, 몹은 레벨 띠를 따라
   /// 군집 배치되어 저레벨 구역이 외곽보다 열 배 넘게 조밀하다. 그래서 마릿수
   /// 상한은 그리는 쪽에서만 강제할 수 있다([_refreshMonsterStreaming] 이
-  /// 가까운 순으로 정렬한 뒤 이 수만큼만 만든다).
-  static const int _maxActiveMonsters = 50;
+  /// **화면 안을 먼저**, 그다음 가까운 순으로 정렬한 뒤 이 수만큼만 만든다).
+  ///
+  /// **50 으로는 화면을 덮지 못한다.** 실측하면 가장 조밀한 저레벨 사냥터는
+  /// 화면 반폭(약 22 타일) 안에만 66 기가 있다. 50 에서 잘리면 그중 열여섯
+  /// 기가 사라지는데, 어떤 몹은 보이고 어떤 몹은 안 보이니 화면이 성기게
+  /// 비어 보인다 — "몬스터가 투명하다" 로 읽히던 증상이다.
+  static const int _maxActiveMonsters = 120;
 
   /// 동시에 그리는 다른 요원의 상한.
   ///
@@ -1435,15 +1445,25 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     final visible = _monsterReleaseRadius * _monsterReleaseRadius;
     final seen = <int>{};
 
-    // **가까운 순서로 본다.** 구독은 면적만 자르므로(청크 3×3) 저레벨 사냥터처럼
-    // 몹이 조밀한 곳에서는 [_maxActiveMonsters] 를 훌쩍 넘는 수가 온다. 도착
-    // 순서대로 자르면 눈앞의 몹을 두고 화면 밖 몹을 그리게 된다.
-    final byDistance = presence.monsters.toList()
-      ..sort((a, b) => (a.grid - player.grid)
-          .length2
-          .compareTo((b.grid - player.grid).length2));
+    // **화면 안을 먼저, 그다음 가까운 순.** 구독은 면적만 자르므로(청크 3×3)
+    // 저레벨 사냥터처럼 몹이 조밀한 곳에서는 [_maxActiveMonsters] 를 훌쩍 넘는
+    // 수가 온다. 거리만으로 자르면 화면 모서리 밖의 몹이 화면 한복판의 몹보다
+    // 가까울 수 있어, 정작 눈에 보여야 할 자리가 빈다.
+    //
+    // 화면 경계는 아이소메트릭에서 마름모라 이 사각형이 실제 시야보다 넉넉하다.
+    // 넉넉한 쪽이 맞다 — 가장자리에서 몹이 갑자기 튀어나오는 것보다 낫다.
+    final bounds = visibleGridBounds(margin: 4);
+    final byPriority = presence.monsters.toList()
+      ..sort((a, b) {
+        final aInView = bounds.contains(Offset(a.grid.x, a.grid.y));
+        final bInView = bounds.contains(Offset(b.grid.x, b.grid.y));
+        if (aInView != bInView) return aInView ? -1 : 1;
+        return (a.grid - player.grid)
+            .length2
+            .compareTo((b.grid - player.grid).length2);
+      });
 
-    for (final snapshot in byDistance) {
+    for (final snapshot in byPriority) {
       // 멀리 있는 것은 아직 그리지 않는다.
       if ((snapshot.grid - player.grid).length2 > visible) continue;
       seen.add(snapshot.id);
