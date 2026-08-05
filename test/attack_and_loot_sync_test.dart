@@ -51,8 +51,11 @@ void main() {
   /// **파일마다 다른 방향을 본다.** 통합 테스트들이 병렬로 돌면서 모두 "안전지대
   /// 밖 가장 가까운 몹" 을 고르면 같은 한 마리에 몰려, 한쪽이 잡아 버린 몹을
   /// 다른 쪽이 계속 기다리다 실패한다. 기능이 멀쩡한데 테스트만 깨진다.
+  //
+  // **구독 범위 안이어야 한다.** 청크가 32 타일이라 3×3 의 보장 반경은 48
+  // 타일이다. 그 밖의 몹은 아예 구독으로 오지 않는다.
   const huntX = center;
-  const huntY = center + 120;
+  const huntY = center + 40;
 
   /// 안전지대에서 넉넉히 떨어진, 이 파일 구역의 가장 가까운 몬스터.
   Monster? nearestLiveMonster(SpacetimeDbClient client) {
@@ -64,7 +67,7 @@ void main() {
       final dy = m.gridY - huntY;
       // 안전지대 안에 선 채로는 때릴 수 없다. 경계에 붙은 몹을 고르면 그 앞에
       // 선 플레이어가 아직 쉬는 곳 안이라 서버가 공격을 거절한다.
-      if ((m.gridX - center).abs() < 40 && (m.gridY - center).abs() < 40) {
+      if ((m.gridX - center).abs() < 30 && (m.gridY - center).abs() < 30) {
         continue;
       }
       final d2 = dx * dx + dy * dy;
@@ -187,8 +190,10 @@ void main() {
     '제자리에서 몸만 돌려도 남의 화면에 방향이 닿는다',
     timeout: const Timeout(Duration(minutes: 2)),
     () async {
-      // 안전지대 밖 같은 자리에 둘을 세운다. 서로의 청크 안에 있어야 행이 온다.
-      const spot = center + 60;
+      // **안전지대 안**에 둘을 세운다. 밖을 지정하면 서버가 입장 좌표를 중심으로
+      // 되돌리는데 구독은 지정한 자리 기준으로 걸려, 정작 자기 주변이 구독
+      // 범위 밖이 된다. 몸을 돌리는 데 안전지대 여부는 상관없다.
+      const spot = center + 10;
       final turner = await joinWorld('도는쪽', x: spot, y: spot);
       final watcher = await joinWorld('보는쪽2', x: spot, y: spot);
       addTearDown(() async {

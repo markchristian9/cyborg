@@ -127,7 +127,11 @@ class Enemy extends IsoEntity with Damageable {
   Vector2? _serverFacing;
 
   /// 마지막으로 **재생한** 타격의 서버 시각(마이크로초).
-  int _playedAttackAt = 0;
+  ///
+  /// `-1` 은 "아직 기준이 없다" 는 뜻이다. 첫 스냅샷이 그 값을 채우고, 그 뒤의
+  /// 변화만 재생한다. 0 을 그 자리에 쓰면 **한 번도 때린 적 없는 몹의 첫
+  /// 타격**(서버 기본값 epoch → 실제 시각)까지 함께 버려진다.
+  int _playedAttackAt = -1;
 
   /// 남은 타격 동작 시간(초). 0 보다 크면 후려치는 중이다.
   double _serverStrike = 0;
@@ -171,7 +175,9 @@ class Enemy extends IsoEntity with Damageable {
     // 첫 스냅샷에서는 재생하지 않는다. 시야에 들어오는 몹이 저마다 허공에
     // 한 번씩 휘두르는 것을 막기 위해서다.
     if (lastAttackAtMicros != _playedAttackAt) {
-      if (_playedAttackAt != 0 && lastAttackAtMicros != 0) {
+      // 첫 스냅샷은 기준만 세운다. 시야에 들어오는 몹이 저마다 허공에 한 번씩
+      // 휘두르는 것을 막기 위해서다.
+      if (_playedAttackAt >= 0 && lastAttackAtMicros != 0) {
         _serverStrike = _serverStrikeDuration;
       }
       _playedAttackAt = lastAttackAtMicros;
@@ -187,6 +193,24 @@ class Enemy extends IsoEntity with Damageable {
       // 함께 때리는 것이 화면에서 읽힌다.
       _hitFlash = 1;
       _healthBarTimer = 2.5;
+
+      // **깎인 만큼을 숫자로 띄운다.** 서버로 판정을 옮기면서 이 숫자가 통째로
+      // 사라졌다 — 때린 본인 화면에도 없었다. 얼마나 아픈지 보이지 않으면
+      // 무기를 바꿀지 도망갈지 판단할 수 없다.
+      //
+      // 서버가 준 비율의 차이로 되짚는다. 정확한 피해량을 서버가 따로 보내지는
+      // 않지만, 최대 체력을 곱하면 화면에 띄우기에 충분히 가깝다.
+      final taken = (_serverHpRatio - hpRatio) * _maxHp;
+      if (taken >= 1 && isMounted) {
+        game.spawnEffect(
+          DamageText(
+            grid: grid.clone(),
+            z: z + 0.9,
+            amount: taken,
+            color: taggedByMe ? GamePalette.bladeCore : GamePalette.textDim,
+          ),
+        );
+      }
     }
     _serverHpRatio = hpRatio;
 
@@ -1161,7 +1185,10 @@ class Enemy extends IsoEntity with Damageable {
     final width = isBoss ? 96.0 : 46.0 * s;
     final height = isBoss ? 8.0 : 5.0;
     final top = isBoss ? -150.0 : -108.0 * s;
-    final ratio = (_hp / _maxHp).clamp(0.0, 1.0);
+    // **`hp` 게터를 쓴다.** 서버가 모는 몹은 `_hp` 필드가 갱신되지 않으므로
+    // 그것을 직접 읽으면 아무리 때려도 바가 가득 찬 채로 남는다 — 맞고 있는지
+    // 조차 화면에서 읽히지 않는다.
+    final ratio = (hp / _maxHp).clamp(0.0, 1.0);
 
     final rect = Rect.fromLTWH(-width / 2, top, width, height);
     canvas.drawRRect(

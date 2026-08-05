@@ -32,6 +32,12 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
         _segFrom = snapshot.grid.clone(),
         _segTo = snapshot.grid.clone(),
         alive = snapshot.alive,
+        // **지금 값을 기준으로 삼는다.** 이 사람이 시야에 들어오기 전에 휘두른
+        // 공격까지 되살려 등장하자마자 허공을 치는 것을 막는다. 기준을 0 으로
+        // 두고 "0 이면 재생하지 않는다" 로 처리하면 **한 번도 공격한 적 없는
+        // 사람의 첫 공격**까지 함께 버려진다 — 두 사람이 마주 서서 시험할 때
+        // 가장 먼저 보는 바로 그 한 번이다.
+        _playedAttackAt = snapshot.lastAttackAtMicros,
         super(grid: snapshot.grid.clone(), bodyRadius: 0.28, depthBias: 0.02);
 
   /// 서버가 부여한 캐릭터 식별자. 같은 사람을 다시 찾는 열쇠다.
@@ -121,7 +127,10 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
   /// 서버 시각을 지금 시각과 견주지 않는다. 기기 시계는 서버와 몇 초씩 어긋나
   /// 있어서, 절대 비교로 거르면 모든 공격이 "너무 오래된 것" 이 되거나 매
   /// 프레임 다시 재생된다. **값이 바뀌었는가**만 본다.
-  int _playedAttackAt = 0;
+  ///
+  /// 생성자가 첫 스냅샷 값으로 채운다. 그래야 "아직 기준이 없다" 와 "이 사람은
+  /// 한 번도 공격한 적이 없다" 를 구별할 수 있다.
+  int _playedAttackAt;
 
   /// 남은 공격 동작 시간(초). 0 보다 크면 휘두르는 중이다.
   double _swingTimer = 0;
@@ -178,12 +187,12 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
 
     // 공격은 **사건**이다. 시각이 바뀐 것을 보고 한 번만 재생한다.
     //
-    // 첫 스냅샷에서 재생하지 않도록 `_playedAttackAt` 이 0 인 동안은 기록만
-    // 한다. 그러지 않으면 시야에 들어오는 모든 사람이 등장하자마자 허공에
-    // 한 번씩 칼을 휘두른다.
+    // 등장 직후의 헛스윙은 생성자가 기준값을 채워 막는다(위 `_playedAttackAt`).
+    // 여기서 다시 "0 이면 거른다" 를 걸면 한 번도 공격한 적 없는 사람의 첫
+    // 공격까지 버려진다.
     final attackAt = snapshot.lastAttackAtMicros;
     if (attackAt != _playedAttackAt) {
-      if (_playedAttackAt != 0 && attackAt != 0) {
+      if (attackAt != 0) {
         _swingTimer = _swingDuration;
         _swingSkill = snapshot.attackSkill;
         // 휘두른 방향으로 몸을 돌린다. 등 뒤를 보고 치는 모습이 되면 누구를
@@ -201,6 +210,11 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
         if (snapshot.attackSkill == AttackSkill.plasma &&
             dir.length2 > 0.0001) {
           _spawnRemoteBolt(dir);
+        } else {
+          // 근접 스윙 소리. **PK 가 허용되는 월드**라 등 뒤에서 누가 칼을
+          // 휘두르는지는 화면 밖에서도 알아야 한다. 거리로 잦아들게 두어
+          // 사냥터 전체가 시끄러워지지 않게 한다.
+          GameAudio.play(Sfx.meleeHit, at: grid, volumeScale: 0.55);
         }
       }
       _playedAttackAt = attackAt;
@@ -314,39 +328,57 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
     return 14 - 40 * Curves.easeOutCubic.transform(strike);
   }
 
-  /// 휘두르는 궤적. 몸 앞으로 지나가는 빛의 호다.
+  /// 휘두르는 칼날과 그 궤적.
   ///
-  /// 팔 각도만으로는 작은 화면에서 눈에 띄지 않는다. **PK 가 허용되는
-  /// 월드**라 누가 누구를 치고 있는지는 멀리서도 읽혀야 한다.
-  void _renderSwingArc(Canvas canvas, double progress) {
-    // 내치는 구간에서만 그린다. 윈드업까지 빛나면 언제 맞았는지 흐려진다.
-    if (progress < 0.3) return;
-    final strike = (progress - 0.3) / 0.7;
-    final fade = (1 - strike).clamp(0.0, 1.0);
+  /// **내 몸이 그리는 것과 같아야 한다**(`Player._renderBladeSwing`). 남의
+  /// 공격만 흐릿한 호 하나로 지나가면, 데이터가 제대로 와도 눈에는 아무 일도
+  /// 일어나지 않은 것처럼 보인다 — 그것이 "내 화면에만 칼이 보인다" 의 정체였다.
+  ///
+  /// 콤보 단계는 서버가 보내지 않으므로 기본 스윙 하나로 그린다. 방향과 시점은
+  /// 서버가 준 값이라 모든 화면에서 같은 자리를 지나간다.
+  void _renderBladeSwing(Canvas canvas, double progress) {
+    const sweep = math.pi * 1.05;
+    final start = _renderYaw - sweep / 2;
+    final angle = start + sweep * progress;
 
-    // 화면 기준으로 바라보는 쪽. 몸의 좌우 반전과 같은 규칙을 쓴다.
-    final facingRight = math.cos(_renderYaw) >= 0;
-    final sweep = math.pi * 0.9;
-    final start = (facingRight ? -sweep / 2 : math.pi - sweep / 2) +
-        sweep * strike * 0.6;
+    const pivot = Offset(0, -52);
+    const length = 62.0;
+    final fade = math.sin(progress * math.pi);
 
+    // 지나온 자리에 남는 빛의 자취.
     canvas.drawArc(
-      Rect.fromCenter(
-        center: const Offset(0, -26),
-        width: 74,
-        height: 52,
-      ),
+      Rect.fromCircle(center: pivot, radius: length * 0.78),
       start,
-      sweep * 0.55,
+      sweep * progress,
       false,
       Paint()
         ..style = PaintingStyle.stroke
+        ..strokeWidth = 16 * fade
         ..strokeCap = StrokeCap.round
-        ..strokeWidth = 4.5 * fade + 1
-        ..color = (_swingSkill == AttackSkill.plasma
-                ? GamePalette.bladeGlow
-                : GamePalette.remotePlayer)
-            .withValues(alpha: 0.75 * fade),
+        ..color = GamePalette.bladeGlow.withValues(alpha: 0.35 * fade)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+    );
+
+    // 칼날 — 번지는 빛 위에 또렷한 심을 겹쳐 그린다.
+    final direction = Offset(math.cos(angle), math.sin(angle));
+    final tip = pivot + direction * length;
+    final hilt = pivot + direction * 18;
+    canvas.drawLine(
+      hilt,
+      tip,
+      Paint()
+        ..strokeWidth = 9
+        ..strokeCap = StrokeCap.round
+        ..color = GamePalette.bladeGlow.withValues(alpha: 0.6)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+    );
+    canvas.drawLine(
+      hilt,
+      tip,
+      Paint()
+        ..strokeWidth = 3.4
+        ..strokeCap = StrokeCap.round
+        ..color = GamePalette.bladeCore,
     );
   }
 
@@ -406,14 +438,18 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
       yaw: _renderYaw,
       baseY: -bob,
       swing: swing,
-      // 평소에는 칼날을 감춘다 — 남의 몸에 켜 두면 나를 향해 겨눈 것처럼
-      // 읽힌다. **휘두르는 순간에만** 꺼내야 공격이 눈에 띈다.
-      showBlade: isSwinging,
+      // 등에 멘 칼은 늘 보인다. 내 몸과 같은 모습이어야 한다.
+      //
+      // 한때 이 값을 `isSwinging` 으로 두었는데, 그것은 오해였다 — 이 플래그는
+      // **등에 멘** 칼을 그리는 것이지 휘두르는 칼날이 아니다. 그래서 휘두를
+      // 때만 등에 칼이 나타났다 사라지는 반대 동작이 되었고, 정작 칼을 휘두르는
+      // 모습은 한 번도 그려지지 않았다.
+      showBlade: true,
       armSwing: attackArm ?? (_moving ? -swing * 6 : 0),
       time: _animTime,
     );
 
-    if (isSwinging) _renderSwingArc(canvas, swingProgress);
+    if (isSwinging) _renderBladeSwing(canvas, swingProgress);
     _renderNameplate(canvas);
   }
 
