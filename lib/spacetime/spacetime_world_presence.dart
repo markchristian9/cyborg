@@ -22,26 +22,29 @@ class SpacetimeWorldPresence extends WorldPresence {
 
   final SpacetimeDbClient _client;
 
-  /// 좌표를 서버에 올리는 간격(초). **20 Hz** — 서버 월드 틱과 같다.
+  /// 좌표를 서버에 올리는 간격. **24 Hz** — 서버 월드 틱과 같다.
+  ///
+  /// 마이크로초로 두는 이유는 1/24 초가 41.666… ms 라 **밀리초로 떨어지지 않기**
+  /// 때문이다. 41ms 는 24.39Hz, 42ms 는 23.81Hz 로 어느 쪽도 24 틱이 아니다.
   ///
   /// 매 프레임 보내면 초당 60번 트랜잭션이 되고, 접속자 수만큼 곱해진다.
-  /// 사람이 걷는 속도(초당 3.6타일)에서 0.05초면 0.18타일 — 남의 화면에서
+  /// 사람이 걷는 속도(초당 3.6타일)에서 1/24 초면 0.15타일 — 남의 화면에서
   /// 보간이 메워야 할 구간이 몸 반 칸도 되지 않는다.
   ///
-  /// **0.2초(5 Hz)에서 올렸다.** 보간은 갱신 간격만큼의 지연을 반드시 안고
-  /// 가므로, 5 Hz 에서는 아무리 매끄럽게 그려도 남이 방향을 튼 것이 0.2초 뒤에
-  /// 닿았다. MMORPG 가 보통 쓰는 10~30 Hz 의 한가운데이며, 서버
-  /// `MONSTER_AI_MILLIS`(50ms)와 같은 리듬이라 PC 와 몹이 함께 갱신된다.
-  static const Duration _interval = Duration(milliseconds: 50);
+  /// **0.2초(5 Hz) → 0.05초(20 Hz) → 1/24 초로 올려 왔다.** 보간은 갱신 간격만큼의
+  /// 지연을 반드시 안고 가므로, 5 Hz 에서는 아무리 매끄럽게 그려도 남이 방향을
+  /// 튼 것이 0.2초 뒤에 닿았다. 서버 `MONSTER_AI_MICROS`(41,667μs)와 같은
+  /// 리듬이라 PC 와 몹이 함께 갱신된다.
+  static const Duration _interval = Duration(microseconds: 41667);
 
   /// 이 거리(타일)보다 적게 움직였으면 보내지 않는다.
   ///
-  /// 가만히 서 있는 사람이 초당 스무 번씩 같은 좌표를 보낼 이유가 없다.
+  /// 가만히 서 있는 사람이 초당 스물네 번씩 같은 좌표를 보낼 이유가 없다.
   ///
-  /// **주기를 20 Hz 로 올리면서 함께 낮췄다.** 한 틱에 걷는 거리가 0.18타일뿐이라
-  /// 문턱이 0.15 면 걸을 때조차 아슬아슬하게 걸려, 주기를 올려 놓고도 실제
-  /// 전송은 띄엄띄엄해진다. 0.04 는 그 4분의 1 남짓이라 움직이는 동안에는
-  /// 확실히 통과하고, 멈춰 서면 여전히 한 번도 보내지 않는다.
+  /// **주기를 올리면서 함께 낮췄다.** 한 틱에 걷는 거리가 0.15타일뿐이라 문턱이
+  /// 0.15 면 걸을 때조차 아슬아슬하게 걸려, 주기를 올려 놓고도 실제 전송은
+  /// 띄엄띄엄해진다. 0.04 는 그 4분의 1 남짓이라 움직이는 동안에는 확실히
+  /// 통과하고, 멈춰 서면 여전히 한 번도 보내지 않는다.
   static const double _minStep = 0.04;
 
   /// 방향이 이만큼 돌아가면 다시 보낸다(두 방향 내적의 문턱값).
@@ -166,6 +169,16 @@ class SpacetimeWorldPresence extends WorldPresence {
   void report(Vector2 grid, Vector2 facing) {
     if (!_entered) return;
 
+    // **서버에 내가 아직 있는지 확인한다.** 없으면 다시 들어간다.
+    //
+    // 행이 사라지는 길은 둘이다. 하나는 연결이 잠깐 끊겨 서버가
+    // `on_disconnect` 로 지운 경우, 다른 하나는 같은 캐릭터로 다른 기기가
+    // 들어와 밀려난 경우다. 어느 쪽이든 클라이언트는 아무것도 통보받지 못하고,
+    // 자기는 월드에 있다고 믿으며 좌표만 계속 보낸다. 그 `move_to` 는 "월드에
+    // 없다" 로 거절되지만 결과를 버리므로 조용하다 — **다른 사람 화면에서 나는
+    // 영영 사라진 채로 남는다.**
+    unawaited(_ensureStillInWorld(grid));
+
     // 좌표 보고와 **별개로** 확인한다. 아래 `_inFlight`·주기 검사에 걸려 보고를
     // 건너뛰는 동안에도 청크는 넘어갈 수 있고, 그때 재구독을 놓치면 주변이
     // 통째로 비어 보인다.
@@ -264,6 +277,46 @@ class SpacetimeWorldPresence extends WorldPresence {
       _subscribing = false;
     }
   }
+
+  /// 마지막으로 재입장을 시도한 시각. 되풀이를 막는 빗장이다.
+  DateTime? _lastReenterAt;
+
+  /// 재입장 사이의 최소 간격.
+  ///
+  /// 같은 캐릭터로 두 기기가 붙으면 서로를 밀어내므로, 짧게 잡으면 둘이 번갈아
+  /// 쫓아내며 깜빡인다. 넉넉히 두어 그 다툼의 주기를 늦춘다 — 근본 해결은
+  /// 사용자가 한쪽을 닫는 것이고, 여기서 할 수 있는 일은 끊겼다 돌아온 쪽을
+  /// 되살리는 것뿐이다.
+  static const Duration _reenterCooldown = Duration(seconds: 3);
+
+  /// 서버에 내 행이 남아 있는지 보고, 없으면 다시 입장한다.
+  Future<void> _ensureStillInWorld(Vector2 grid) async {
+    if (_myRow != null || _reentering) return;
+
+    final last = _lastReenterAt;
+    final now = DateTime.now();
+    if (last != null && now.difference(last) < _reenterCooldown) return;
+    _lastReenterAt = now;
+
+    _reentering = true;
+    final generation = _generation;
+    try {
+      await _client.reducers.enterWorld(gridX: grid.x, gridY: grid.y);
+      if (generation != _generation) return;
+      // 좌표 보고의 기준을 다시 세운다. 비워 두면 첫 보고가 "얼마나 움직였나"
+      // 를 판단할 기준을 잃는다.
+      _lastSentGrid = grid.clone();
+      _lastSentAt = DateTime.now();
+    } on SpacetimeDbException {
+      // 캐릭터를 고르지 않았거나 아직 연결이 돌아오지 않았다. 다음 주기에
+      // 다시 시도한다.
+    } finally {
+      _reentering = false;
+    }
+  }
+
+  /// 재입장이 진행 중인지. 겹쳐 보내지 않기 위한 빗장이다.
+  bool _reentering = false;
 
   Future<void> _send(Vector2 grid, Vector2 facing) async {
     _inFlight = true;

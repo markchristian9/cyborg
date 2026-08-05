@@ -19,9 +19,10 @@ import 'projectile.dart';
 /// 조종하지 않는 몸이므로 입력도 전투 판정도 없다. 서버가 알려 준 좌표를 향해
 /// 미끄러지듯 따라가며 그려질 뿐이다.
 ///
-/// 좌표를 그대로 순간이동시키지 않는 이유가 있다. 위치 보고는 0.05 초마다(20 Hz)
-/// 오는데, 받은 값을 즉시 반영하면 다른 사람이 초당 스무 번 계단을 밟듯 튄다.
-/// 목표를 향해 보간하면 같은 데이터로도 걸어오는 것처럼 보인다.
+/// 좌표를 그대로 순간이동시키지 않는 이유가 있다. 위치 보고는 1/24 초마다(24 Hz)
+/// 오는데, 받은 값을 즉시 반영하면 다른 사람이 초당 스물네 번 계단을 밟듯 튄다.
+/// 목표를 향해 보간하면 같은 데이터로도 걸어오는 것처럼 보인다 — 화면은 60fps 로
+/// 그리므로 갱신 하나를 두세 프레임에 나누어 지나간다.
 class RemotePlayerEntity extends IsoEntity with TapCallbacks {
   RemotePlayerEntity({required RemotePlayer snapshot})
       : characterId = snapshot.characterId,
@@ -82,11 +83,11 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
 
   DateTime? _lastServerAt;
 
-  /// 위치 보고 주기(0.05초 = 20 Hz)를 기본값으로 삼는다.
+  /// 위치 보고 주기(1/24 초 = 24 Hz)를 기본값으로 삼는다.
   ///
   /// 첫 갱신 한 번을 받기 전까지만 쓰이는 값이다. 그 뒤로는 [_tickEstimate] 가
   /// 실측으로 덮으므로, 서버 주기가 바뀌어도 여기를 고치지 않아 어긋날 일은 없다.
-  static const double _defaultSegment = 0.05;
+  static const double _defaultSegment = 1 / 24;
 
   /// 구간 길이에 곱하는 여유. [Enemy] 와 같은 이유로 1 보다 커야 한다 —
   /// 배정 시간이 실측 간격과 같으면 갱신이 늦을 때마다 도착해 **멈춘다.**
