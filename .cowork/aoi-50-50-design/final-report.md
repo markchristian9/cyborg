@@ -183,3 +183,41 @@ r=479 (레벨 200) → 0.00443            ← 35.5 타일
 - **`_monsterReleaseRadius` 를 줄이면 자동 사냥·파티 추종과 충돌하는지.** [auto_hunt.dart](../../lib/game/systems/auto_hunt.dart) 가 60 타일 안의 몹 존재를 전제하고 있다면 회귀가 난다. 이번 구현에서는 **이 값을 건드리지 않는다.**
 - **배포된 테이블에 btree 인덱스 추가가 자동 마이그레이션으로 처리되는지 미확인.** [world.rs:301-307](../../spacetimedb/src/world.rs#L301) 이 명시하는 것은 *컬럼* 조건뿐이다. 배포 전 로컬 인스턴스에서 확인해야 한다.
 - **모든 수치가 계산이며 측정이 아니다.** 부하 시험이 실행된 기록이 없다.
+
+---
+
+## 9. 적용 결과
+
+> 적용: 2026-08-05 · 커밋 `938f549` · **배포하지 않음**
+
+| 권고 | 적용 | 파일 | 검증 |
+|---|---|---|---|
+| 1 `loot` 청크 구독 | ✅ | `cyborg_connection.dart` | `aoi_subscription_test.dart` — `loot` 이 `chunk` 로 걸리는지 |
+| 2 `Monster.pos_chunk` | ✅ | `world.rs` (맨 끝, `#[default(0u32)]`, `by_pos_chunk`) | `cargo test` 62 통과 |
+| 3 `WorldPlayer.sub_chunk` | ✅ | `world.rs` (맨 끝, `by_sub_chunk`) | 동일 |
+| 4 좌표 여섯 지점 갱신 | ✅ | `bootstrap`·`enter_world`·`move_to`·`teleport_to`·**사망 재가동**·`monster_ai`·`monster_tick` | `cargo test` + 청크 번호 유일성 테스트 |
+| 5 구독 함수화 | ✅ | `worldSubscriptionsFor(x, y)` | `aoi_subscription_test.dart` 10 개 |
+| 6 재구독 관리 | ✅ | `_maybeResubscribe` — 히스테리시스 8 타일, 쿨다운 1.5s, 한 청크 이상 도약 시 즉시 | 이웃 청크가 여섯 칸을 공유하는지 테스트 |
+| 7 표시 상한 | ✅ | `_maxRemotePlayers = 50`(신설), `_maxActiveMonsters` 140→50 **+ 거리순 정렬** | `flutter test` 236 통과 |
+| 8 정지 몹 쓰기 금지 | ✅ | `moved_enough()` | `cargo test` |
+| 9 세로 분할·2Hz·AI 곱셈 | ⏸️ 보류 | — | 파급이 커 별도 작업. 직전 보고서에서 이미 분리한 항목 |
+| `_monsterReleaseRadius` 60→28 | ⏸️ 보류 | — | §8 대로 `auto_hunt` 와 충돌 여부 미확인. 건드리지 않았다 |
+
+**적용 중 발견해 바로잡은 것** (권고에 없었음):
+
+- **`sub_chunk` 를 처음에 구조체 중간에 넣었다.** 편집 시점에 `last_damaged_at` 이 마지막인 줄 알았으나, 실제로는 뒤에 `last_attack_at`·`attack_dir_x`·`attack_dir_y`·`attack_skill` 이 있었다(다른 세션이 같은 파일을 동시에 편집 중이었고, 도구가 "파일이 디스크에서 바뀌었다" 고 알렸다). **자동 마이그레이션 조건(맨 끝) 위반**이라 맨 끝으로 옮기고 바인딩을 다시 생성해 `subChunk` 가 마지막인 것을 확인했다.
+- **Dart 바인딩은 `spacetime generate` 로 못 만든다** — CLI 가 dart 를 지원하지 않는다. `dart run spacetimedb_sdk:generate --project-path ./spacetimedb` 를 쓴다. 배포 없이 로컬 모듈에서 생성된다.
+- 내 변경으로 깨진 테스트 2 개(`kWorldSubscriptions` 참조)를 새 함수로 고쳤다.
+
+**검증 결과:**
+
+- `cargo test` — 62 통과 / 0 실패 (청크 번호 유일성, 인원 역산, 화면 보장 반경, 집 청크 재사용 불가 전제를 테스트로 고정)
+- `flutter test --exclude-tags integration` — 236 통과 / 0 실패
+- `flutter analyze` — 내 변경으로 인한 오류 0
+
+**사람 확인·후속 조치 필요:**
+
+- **배포는 하지 않았다.** `WorldPlayer`·`Monster` 에 열이 붙어 자동 마이그레이션이 일어나고 되돌릴 수 없다. `spacetime publish` 는 사람이 판단한다.
+- **통합 검증이 남았다.** `test/world_presence_test.dart`·`test/monster_authority_test.dart` 와 `scripts/run.sh --count N` 은 배포된 서버가 있어야 돈다. 배포 후 "멀리 떨어지면 서로 안 보이고 가까워지면 보인다" 를 반드시 확인해야 한다.
+- **기존 행은 첫 이동 전까지 좌상단 청크(0)에 남는다.** 기본값이 0 이기 때문이다. 몹은 `rebuild_monsters` 또는 리스폰이 지나면 제 값을 얻는다.
+- **같은 파일을 편집하던 다른 세션의 변경**(`pickup.dart`·`remote_player.dart`·`net/world_presence.dart` 의 전리품 작업)이 의존 때문에 같은 커밋에 들어갔다.
