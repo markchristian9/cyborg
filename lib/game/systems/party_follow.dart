@@ -105,6 +105,13 @@ class PartyFollowController {
   /// 상대에게 오래 걸어가는 것은 정상이고, 막힌 것과는 다르다.
   static const double rejoinTimeout = 8.0;
 
+  /// 상대를 못 찾은 채 이만큼(초)까지는 기다린다.
+  ///
+  /// 목록에서 잠깐 사라지는 것과 정말 떠난 것은 다르다. 주변만 받아 오는 구독은
+  /// 상대가 경계를 넘을 때 다시 걸리는데, 그 왕복 동안 한두 프레임은 비어 있다.
+  /// 유예가 없으면 그 순간을 "월드에서 사라졌다" 로 읽어 추종이 끊긴다.
+  static const double missingGrace = 1.5;
+
   /// 이만큼(타일) 가까워지면 "다가가고 있다" 고 본다.
   ///
   /// 0 으로 두면 좌표가 미세하게 흔들리는 것만으로 진전으로 쳐서, 벽에 붙어
@@ -119,6 +126,9 @@ class PartyFollowController {
 
   /// 지금 따라붙는 중(사냥을 접은 상태)인가.
   bool _rejoining = false;
+
+  /// 상대를 못 찾은 채 흐른 시간.
+  double _missingTime = 0;
 
   /// 지금 따라가고 있는 상대.
   ///
@@ -140,6 +150,7 @@ class PartyFollowController {
     _bestDistance = double.infinity;
     _rejoining = false;
     _targetId = null;
+    _missingTime = 0;
   }
 
   /// 내가 순간이동했다고 알린다 — 쓰러졌다 안전지대에서 되살아났을 때.
@@ -171,14 +182,23 @@ class PartyFollowController {
       return const PartyFollowDecision(PartyFollowAction.none);
     }
 
-    // ① 상대가 월드에 없다. 접속을 끊었거나 월드 밖으로 나갔다.
+    // ① 상대가 목록에 없다. 정말 떠났을 수도, 구독이 잠깐 비었을 수도 있다.
+    //
+    // 곧바로 끊지 않고 [missingGrace] 만큼 기다린다 — 그 사이 다시 보이면 아무
+    // 일도 없었던 것처럼 이어진다. 기다리는 동안에는 사냥 중심을 옮기지 않고
+    // 하던 것을 잇는다(상대가 쓰러졌을 때와 같은 처리다).
     if (leader == null) {
+      _missingTime += dt;
+      if (_missingTime < missingGrace) {
+        return const PartyFollowDecision(PartyFollowAction.hold);
+      }
       reset();
       return const PartyFollowDecision(
         PartyFollowAction.lost,
         message: '따라가던 요원이 월드에서 사라졌다',
       );
     }
+    _missingTime = 0;
 
     // 따라갈 사람이 바뀌었으면(파티장 위임) 처음부터 다시 잰다.
     if (leader.characterId != _targetId) {

@@ -53,10 +53,14 @@ const int kMonsterSubChunkTiles = 32;
 const int kMonsterSubChunksPerRow = 32; // (1006 / 32) + 1
 
 /// `(cx, cy)` 를 중심으로 한 3×3 청크 번호. 월드 밖은 버린다.
-List<int> _neighborChunks(int cx, int cy, int perRow) {
+/// `(cx, cy)` 를 중심으로 반지름 [ring] 칸의 정사각 청크 번호. 월드 밖은 버린다.
+///
+/// [ring] 이 1 이면 3×3, 2 면 5×5 다. 사람과 몹에 다른 값을 쓴다 — 사람은
+/// 3×3 이면 화면을 충분히 덮지만, 몹은 화면을 빽빽이 채워야 사냥터로 보인다.
+List<int> _neighborChunks(int cx, int cy, int perRow, {int ring = 1}) {
   final keys = <int>[];
-  for (var dy = -1; dy <= 1; dy++) {
-    for (var dx = -1; dx <= 1; dx++) {
+  for (var dy = -ring; dy <= ring; dy++) {
+    for (var dx = -ring; dx <= ring; dx++) {
       final nx = cx + dx;
       final ny = cy + dy;
       if (nx < 0 || ny < 0 || nx >= perRow || ny >= perRow) continue;
@@ -79,7 +83,11 @@ List<int> _neighborChunks(int cx, int cy, int perRow) {
 /// **이것은 면적을 자를 뿐 인원을 자르지 않는다.** 안전지대처럼 사람이 몰리면
 /// 그 수만큼 그대로 온다. "가까운 50 명" 은 `ActionRpgGame` 이 거리순으로 잘라
 /// 만든다.
-List<String> worldSubscriptionsFor(double tileX, double tileY) {
+List<String> worldSubscriptionsFor(
+  double tileX,
+  double tileY, {
+  int? alwaysWatchCharacterId,
+}) {
   String query(String table, String column, List<int> keys) =>
       'SELECT * FROM $table WHERE '
       '${keys.map((k) => '$column = $k').join(' OR ')}';
@@ -90,14 +98,26 @@ List<String> worldSubscriptionsFor(double tileX, double tileY) {
     kPlayerSubChunksPerRow,
   );
   // 몹과 전리품은 같은 격자를 쓰므로 청크 번호를 한 번만 계산해 함께 쓴다.
+  //
+  // **넓히지 않는다.** 한때 5×5 로 늘려 봤지만 화면 안에 보이는 몹 수는 그대로였다 —
+  // 늘어난 것은 화면 밖 몹과 전송량(2.4 배)뿐이었다. 화면을 빽빽하게 만드는 것은
+  // 구독 범위가 아니라 **스폰 밀도**다(서버 `CLUSTER_MIN`/`CLUSTER_MAX`).
   final fieldKeys = _neighborChunks(
     tileX ~/ kMonsterSubChunkTiles,
     tileY ~/ kMonsterSubChunkTiles,
     kMonsterSubChunksPerRow,
   );
 
+  // 따라다니는 상대는 청크 밖으로 나가도 계속 보여야 한다. 안 그러면 그 사람이
+  // 경계를 넘는 순간 목록에서 사라지고, 화면은 그것을 "월드에서 나갔다" 와 구별할
+  // 수 없어 추종이 끊긴다. 청크 번호 나열에 등식 하나를 더 붙이는 것으로 끝난다.
+  var playerQuery = query('world_player', 'sub_chunk', playerKeys);
+  if (alwaysWatchCharacterId != null) {
+    playerQuery = '$playerQuery OR character_id = $alwaysWatchCharacterId';
+  }
+
   return [
-    query('world_player', 'sub_chunk', playerKeys),
+    playerQuery,
     // 몬스터도 **서버가 진실**이다. 클라이언트가 따로 만들어 내면 A 가 잡은 몹이
     // B 화면에 살아 있게 되고, 그러면 같은 대상을 함께 때리는 일이 성립하지 않는다.
     //

@@ -213,10 +213,10 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 이 거리보다 멀어지면 다시 잠재운다. 경계에서 깜빡이지 않도록 활성
   /// 반경보다 넓게 둔다.
   ///
-  /// **화면보다 조금만 넓게 잡는다.** 예전에는 60 이었는데, 그 반경이 화면
-  /// 반폭(약 22 타일)의 세 배에 가까워 눈에 보이지도 않는 몹이 마릿수 상한을
-  /// 먼저 채웠다. 조밀한 저레벨 사냥터에서는 그 결과 **눈앞의 몹이 그려지지
-  /// 않아 화면이 비어 보였다**(실측: 화면 반폭 안에만 66 기).
+  /// **화면보다 조금만 넓게 잡는다.** 한때 60 이었는데, 그 반경이 화면 반폭(약
+  /// 22 타일)의 세 배에 가까워 눈에 보이지도 않는 몹이 마릿수 상한을 먼저
+  /// 채웠다. 조밀한 사냥터에서는 그 결과 눈앞의 몹이 그려지지 않아 화면이 비어
+  /// 보였다.
   static const double _monsterReleaseRadius = 34;
 
   /// 동시에 살아 움직일 수 있는 상주 로봇의 상한.
@@ -231,7 +231,11 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 화면 반폭(약 22 타일) 안에만 66 기가 있다. 50 에서 잘리면 그중 열여섯
   /// 기가 사라지는데, 어떤 몹은 보이고 어떤 몹은 안 보이니 화면이 성기게
   /// 비어 보인다 — "몬스터가 투명하다" 로 읽히던 증상이다.
-  static const int _maxActiveMonsters = 120;
+  ///
+  /// 120 에서 360 으로 올렸다(사냥터를 세 배로 붐비게 해 달라는 요청). 이 수는
+  /// **화면에 동시에 존재할 수 있는 몸의 수**이므로 저사양 기기의 프레임과
+  /// 직결된다. 화면이 버벅이면 여기부터 내린다.
+  static const int _maxActiveMonsters = 360;
 
   /// 동시에 그리는 다른 요원의 상한.
   ///
@@ -932,6 +936,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         if (autoHunt.enabled) autoHunt.moveAnchor(player.grid);
         _showBanner('추종이 끝났다');
       }
+      if (_wasFollowing) presence.watchCharacter(null);
       _wasFollowing = false;
       _followStopping = false;
       partyFollow.reset();
@@ -939,6 +944,10 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     }
     _wasFollowing = true;
     if (_followStopping) return;
+
+    // 따라가는 상대는 멀어져도 계속 보여야 한다. 주변만 받아 오는 구독에서
+    // 사라지면 화면은 그것을 "월드에서 나갔다" 와 구별할 수 없다.
+    presence.watchCharacter(_followingCharacterId);
 
     // 쓰러져 있는 동안에는 판단하지 않는다. 되살아난 뒤 거리를 보고 이어갈지
     // 정하며, 너무 멀면 그때 스스로 끊는다.

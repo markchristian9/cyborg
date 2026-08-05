@@ -116,8 +116,11 @@ class SpacetimeWorldPresence extends WorldPresence {
     if (_querySetId == null && !_subscribing) {
       _subscribing = true;
       try {
-        final id = await _client.subscriptions
-            .subscribe(worldSubscriptionsFor(grid.x, grid.y));
+        final id = await _client.subscriptions.subscribe(worldSubscriptionsFor(
+          grid.x,
+          grid.y,
+          alwaysWatchCharacterId: _watchedCharacterId,
+        ));
         if (generation != _generation) {
           _client.subscriptions.unsubscribe(id);
           return;
@@ -226,7 +229,25 @@ class SpacetimeWorldPresence extends WorldPresence {
   /// 만큼 들어왔다" 인 이유는 경계선 위를 왕복할 때의 진동을 막기 위해서다.
   /// 다만 **한 청크를 통째로 건너뛴 이동**(텔레포트·사망 재가동)은 히스테리시스도
   /// 쿨다운도 무시한다 — 그 경우 옛 구독은 이미 아무 쓸모가 없다.
-  Future<void> _maybeResubscribe(Vector2 grid) async {
+  /// 청크 밖으로 나가도 계속 보아야 하는 사람.
+  ///
+  /// 따라다니는 상대가 여기 들어온다. 이 값이 바뀌면 자리를 옮기지 않았어도 곧바로
+  /// 다시 구독해야 한다 — 그러지 않으면 새 상대가 멀리 있을 때 목록에 나타나지
+  /// 않는다.
+  int? _watchedCharacterId;
+
+  @override
+  void watchCharacter(int? characterId) {
+    if (_watchedCharacterId == characterId) return;
+    _watchedCharacterId = characterId;
+    // 자리는 그대로여도 구독 내용이 달라졌으므로 곧바로 다시 건다.
+    final row = _myRow;
+    if (row != null) {
+      unawaited(_maybeResubscribe(Vector2(row.gridX, row.gridY), force: true));
+    }
+  }
+
+  Future<void> _maybeResubscribe(Vector2 grid, {bool force = false}) async {
     if (_subscribing || _querySetId == null) return;
 
     final cx = grid.x ~/ kPlayerSubChunkTiles;
@@ -234,10 +255,12 @@ class SpacetimeWorldPresence extends WorldPresence {
     final fromCx = _subCx;
     final fromCy = _subCy;
     if (fromCx == null || fromCy == null) return;
-    if (cx == fromCx && cy == fromCy) return;
+    if (!force && cx == fromCx && cy == fromCy) return;
 
     // 3×3 밖으로 나갔다면 옛 구독에는 지금 주변이 한 칸도 없다. 즉시 옮긴다.
-    final jumped = (cx - fromCx).abs() > 1 || (cy - fromCy).abs() > 1;
+    // 감시 대상이 바뀐 경우도 미룰 이유가 없다.
+    final jumped =
+        force || (cx - fromCx).abs() > 1 || (cy - fromCy).abs() > 1;
 
     if (!jumped) {
       final localX = grid.x - cx * kPlayerSubChunkTiles;
@@ -258,8 +281,11 @@ class SpacetimeWorldPresence extends WorldPresence {
     _subscribing = true;
     final old = _querySetId;
     try {
-      final id = await _client.subscriptions
-          .subscribe(worldSubscriptionsFor(grid.x, grid.y));
+      final id = await _client.subscriptions.subscribe(worldSubscriptionsFor(
+        grid.x,
+        grid.y,
+        alwaysWatchCharacterId: _watchedCharacterId,
+      ));
       if (generation != _generation) {
         // 그 사이 월드를 떠났다. 새로 건 것만 정리한다 — 옛 것은 `leave` 가 이미 풀었다.
         _client.subscriptions.unsubscribe(id);

@@ -45,12 +45,46 @@ void main() {
   });
 
   group('추종 — 상대를 잃었을 때', () {
-    test('상대가 월드에 없으면 추종을 끊는다', () {
+    test('잠깐 목록에서 사라진 것은 끊지 않는다', () {
       final follow = PartyFollowController();
       final decision = _step(follow, leader: null, self: Vector2(10, 10));
 
-      expect(decision.action, PartyFollowAction.lost);
-      expect(decision.message, isNotNull);
+      // 주변만 받아 오는 구독은 상대가 경계를 넘을 때 잠깐 빈다. 그 한 프레임을
+      // "떠났다" 로 읽으면 이끌기가 경계마다 끊긴다.
+      expect(decision.action, PartyFollowAction.hold);
+    });
+
+    test('유예가 지나도 안 보이면 끊는다', () {
+      final follow = PartyFollowController();
+
+      PartyFollowAction? last;
+      final steps = (PartyFollowController.missingGrace / (1 / 60)).ceil() + 5;
+      for (var i = 0; i < steps; i++) {
+        last = _step(follow, leader: null, self: Vector2(10, 10)).action;
+        if (last == PartyFollowAction.lost) break;
+      }
+
+      expect(last, PartyFollowAction.lost);
+    });
+
+    test('사라졌다 다시 보이면 아무 일도 없던 것처럼 잇는다', () {
+      final follow = PartyFollowController();
+
+      // 유예의 절반쯤 비어 있다가
+      final half = (PartyFollowController.missingGrace / 2 / (1 / 60)).ceil();
+      for (var i = 0; i < half; i++) {
+        _step(follow, leader: null, self: Vector2(0, 0));
+      }
+
+      // 다시 나타난다.
+      final decision = _step(follow, leader: _leader(3, 0), self: Vector2(0, 0));
+      expect(decision.action, PartyFollowAction.anchor);
+
+      // 그리고 유예는 처음부터 다시 센다.
+      for (var i = 0; i < half; i++) {
+        final d = _step(follow, leader: null, self: Vector2(0, 0));
+        expect(d.action, PartyFollowAction.hold);
+      }
     });
 
     test('손쓸 수 없이 멀면 따라붙기를 시도하지도 않는다', () {

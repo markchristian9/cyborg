@@ -273,6 +273,13 @@ abstract class WorldPresence {
 
   /// 월드에 연결되어 있는지.
   bool get isAvailable => false;
+
+  /// 이 사람은 멀어져도 계속 보이게 한다. null 이면 그런 사람이 없다.
+  ///
+  /// 주변만 받아 오는 구독에서는 멀어진 사람이 목록에서 사라지는데, 화면은 그것을
+  /// "월드에서 나갔다" 와 구별할 수 없다. 따라다니는 상대에게는 그 구별이
+  /// 필요하므로 한 명만 예외로 둔다.
+  void watchCharacter(int? characterId) {}
 }
 
 /// 서버가 없을 때 쓰는 빈 구현.
