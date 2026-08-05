@@ -107,9 +107,6 @@ class ContextActionBar extends PositionComponent
     if (party.members.any((m) => m.characterId == target.characterId)) {
       return ('파티원', false);
     }
-    if (party.inParty && !party.isLeader) {
-      return ('파티장만 초대', false);
-    }
     if (party.inParty && party.isFull) {
       return ('정원이 찼다', false);
     }

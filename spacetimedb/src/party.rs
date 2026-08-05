@@ -320,7 +320,7 @@ pub fn invite_to_party(ctx: &ReducerContext, target_character_id: u64) -> Result
         return Err("상대가 이미 다른 파티에 있다.".to_string());
     }
 
-    // 파티가 없으면 지금 만든다. 있으면 파티장만 초대할 수 있다.
+    // 파티가 없으면 지금 만든다. 있으면 자리가 남았는지만 본다.
     let party_id = ensure_party(ctx, character_id)?;
 
     sweep_expired_invites(ctx, target_character_id);
@@ -938,11 +938,21 @@ fn dist_sq(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
     dx * dx + dy * dy
 }
 
-/// 부르는 사람의 파티를 확보한다. 없으면 만들고, 있으면 자격을 본다.
+/// 부르는 사람의 파티를 확보한다. 없으면 만들고, 있으면 자리가 남았는지 본다.
 ///
 /// 초대는 두 갈래([`invite_to_party`]·[`invite_nearby`])인데 앞단이 똑같다 —
-/// 파티가 없으면 만들고, 있으면 파티장인지와 자리가 남았는지를 본다. 한 곳에
-/// 모아 두 갈래가 어긋나지 않게 한다.
+/// 파티가 없으면 만들고, 있으면 자리를 본다. 한 곳에 모아 두 갈래가 어긋나지
+/// 않게 한다.
+///
+/// ## 파티장만 부를 수 있게 하지 않는 이유
+///
+/// 파티는 함께 다니려고 맺는 것이지 위계가 아니다. 아는 사람을 만났을 때 파티장을
+/// 찾아 부탁해야 한다면, 그 사람은 대개 그냥 지나간다. 이끌기를 누구나 할 수 있게
+/// 한 것과 같은 판단이다 — 파티장이 쥐는 것은 **내보내는 일**(추방·해산)이지
+/// 불러들이는 일이 아니다.
+///
+/// 들어오는 쪽은 어차피 본인이 수락해야 하므로, 아무나 부를 수 있어도 남의 파티에
+/// 강제로 넣는 일은 생기지 않는다.
 fn ensure_party(ctx: &ReducerContext, character_id: u64) -> Result<u64, String> {
     match ctx.db.party_member().character_id().find(character_id) {
         Some(member) => {
@@ -952,9 +962,6 @@ fn ensure_party(ctx: &ReducerContext, character_id: u64) -> Result<u64, String> 
                 .id()
                 .find(member.party_id)
                 .ok_or_else(|| "파티를 찾을 수 없다.".to_string())?;
-            if party.leader_character_id != character_id {
-                return Err("파티장만 초대할 수 있다.".to_string());
-            }
             if party_size(ctx, party.id) >= MAX_PARTY_SIZE {
                 return Err(format!("파티가 가득 찼다(최대 {MAX_PARTY_SIZE}명)."));
             }

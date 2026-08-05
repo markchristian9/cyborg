@@ -64,6 +64,12 @@ class PartyPanel extends PositionComponent
   /// 아래쪽 버튼 줄의 높이.
   static const double footerHeight = 40;
 
+  /// 파티원 아래에 이어 붙일 초대 후보의 최대 줄 수.
+  ///
+  /// 파티원 목록을 밀어내지 않을 만큼만 보여 준다. 더 부르려면 "주변 모두
+  /// 부르기" 가 있다.
+  static const int maxInviteRows = 4;
+
   /// 목록에 한 번에 보여 줄 최대 줄 수.
   ///
   /// 정원은 12 명이지만 화면을 다 덮으면 사냥을 볼 수 없다. 넘치는 만큼은
@@ -141,6 +147,21 @@ class PartyPanel extends PositionComponent
     return _nearbyRows();
   }
 
+  /// 파티원 아래에 이어 붙일 초대 후보.
+  ///
+  /// 파티가 없을 때는 [_rows] 자체가 후보 목록이므로 여기서는 비운다. 파티가
+  /// 있을 때만 "누구를 더 부를까" 라는 물음이 따로 생긴다.
+  ///
+  /// 이미 파티에 있는 사람은 뺀다 — 부를 수 없는 사람을 목록에 두면 누를 때마다
+  /// 거절만 돌아온다.
+  List<_Row> get _inviteCandidates {
+    final party = _party;
+    if (!party.inParty || party.isFull) return const [];
+
+    final mine = {for (final m in party.members) m.characterId};
+    return _nearbyRows().where((r) => !mine.contains(r.characterId)).toList();
+  }
+
   List<_Row> _memberRows(PartySession party) {
     final others = {
       for (final other in game.presence.others) other.characterId: other,
@@ -209,10 +230,14 @@ class PartyPanel extends PositionComponent
   void _resize() {
     final count = _rows.length.clamp(0, maxVisibleRows);
     final overflow = _rows.length > maxVisibleRows ? 16.0 : 0.0;
+    final invites = _inviteCandidates.length.clamp(0, maxInviteRows);
+    // 초대 구역은 안내 한 줄(18)을 머리에 두고 시작한다.
+    final inviteHeight = invites == 0 ? 0.0 : 18 + rowHeight * invites;
     size.y = headerHeight +
         padding * 2 +
         rowHeight * count +
         overflow +
+        inviteHeight +
         (_showsFooter ? footerHeight : 0) +
         (count == 0 ? 24 : 0);
   }
@@ -298,6 +323,23 @@ class PartyPanel extends PositionComponent
       y += 16;
     }
 
+    // 파티 중이라면 그 아래에 "더 부를 수 있는 사람" 을 잇는다. 파티가 찼거나
+    // 주변에 아무도 없으면 구역 자체가 나타나지 않는다.
+    final candidates = _inviteCandidates;
+    if (candidates.isNotEmpty) {
+      _muted.render(canvas, '주변 요원 — 눌러서 초대', Vector2(padding, y + 2));
+      y += 18;
+      for (var i = 0; i < candidates.length && i < maxInviteRows; i++) {
+        _renderRow(
+          canvas,
+          candidates[i],
+          y,
+          pressed: _pressedRow == visible.length + i,
+        );
+        y += rowHeight;
+      }
+    }
+
     if (_showsFooter) _renderFooter(canvas, y);
   }
 
@@ -336,11 +378,12 @@ class PartyPanel extends PositionComponent
   Rect get _closeRect =>
       Rect.fromLTWH(panelWidth - padding - 26, 4, 26, headerHeight - 6);
 
-  /// 한 번에 부르기는 **부를 자격이 있을 때만** 보여 준다.
+  /// 한 번에 부르기는 자리가 남아 있으면 **누구에게나** 보여 준다.
   ///
-  /// 파티가 없으면 만들면서 부르고, 있으면 파티장만 부를 수 있다. 파티원에게
-  /// 보여 주면 누를 때마다 "파티장만 초대할 수 있다" 만 뜬다.
-  bool get _showsInviteAll => !_party.inParty || _party.isLeader;
+  /// 파티장만 부를 수 있게 하면 아는 사람을 만났을 때 파티장을 찾아 부탁해야
+  /// 하고, 그러느니 대개 그냥 지나간다. 파티장이 쥐는 것은 내보내는 일이지
+  /// 불러들이는 일이 아니다.
+  bool get _showsInviteAll => !_party.inParty || !_party.isFull;
 
   Rect get _inviteAllRect =>
       Rect.fromLTWH(panelWidth - padding - 26 - 108, 5, 104, headerHeight - 8);
@@ -480,9 +523,26 @@ class PartyPanel extends PositionComponent
       return;
     }
 
+    final overflow = _rows.length > maxVisibleRows ? 16.0 : 0.0;
+    final candidates = _inviteCandidates;
+    final shownCandidates =
+        candidates.length > maxInviteRows ? maxInviteRows : candidates.length;
+
+    if (shownCandidates > 0) {
+      // 안내 한 줄만큼 내려간 자리에서 시작한다.
+      final inviteTop = listBottom + overflow + 18;
+      final inviteBottom = inviteTop + rowHeight * shownCandidates;
+      if (local.y >= inviteTop && local.y < inviteBottom) {
+        final index = ((local.y - inviteTop) / rowHeight).floor();
+        _pressedRow = rows.length + index;
+        return;
+      }
+    }
+
     if (_showsFooter) {
-      final overflow = _rows.length > maxVisibleRows ? 16.0 : 0.0;
-      final footerTop = listBottom + overflow;
+      final inviteHeight =
+          shownCandidates == 0 ? 0.0 : 18 + rowHeight * shownCandidates;
+      final footerTop = listBottom + overflow + inviteHeight;
       if (local.y >= footerTop && local.y < footerTop + footerHeight) {
         final width = (panelWidth - padding * 2 - 8) / 2;
         _pressedButton = local.x < padding + width ? 0 : 1;
@@ -512,7 +572,17 @@ class PartyPanel extends PositionComponent
 
     if (row >= 0) {
       final rows = _rows.take(maxVisibleRows).toList();
-      if (row < rows.length) _onRowSelected(rows[row]);
+      if (row < rows.length) {
+        _onRowSelected(rows[row]);
+        return;
+      }
+      // 파티원 다음 줄부터는 초대 후보다.
+      final candidates = _inviteCandidates;
+      final index = row - rows.length;
+      if (index < candidates.length) {
+        final target = candidates[index];
+        game.invitePlayerToParty(target.characterId, target.name);
+      }
       return;
     }
     if (button >= 0) _onButtonSelected(button);
