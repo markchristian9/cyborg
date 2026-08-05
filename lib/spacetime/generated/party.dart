@@ -7,6 +7,8 @@ class Party {
     required this.id,
     required this.leaderCharacterId,
     required this.createdAt,
+    required this.huntLeadCharacterId,
+    required this.huntLeadSeq,
   });
 
   factory Party.fromJson(Map<String, dynamic> json) {
@@ -14,6 +16,10 @@ class Party {
       id: Int64(json['id'] ?? 0),
       leaderCharacterId: Int64(json['leaderCharacterId'] ?? 0),
       createdAt: Int64(json['createdAt'] ?? 0),
+      huntLeadCharacterId: json['huntLeadCharacterId'] == null
+          ? null
+          : Int64(json['huntLeadCharacterId']),
+      huntLeadSeq: Int64(json['huntLeadSeq'] ?? 0),
     );
   }
 
@@ -23,10 +29,19 @@ class Party {
 
   final Int64 createdAt;
 
+  final Int64? huntLeadCharacterId;
+
+  final Int64 huntLeadSeq;
+
   void encodeBsatn(BsatnEncoder encoder) {
     encoder.writeU64(id);
     encoder.writeU64(leaderCharacterId);
     encoder.writeI64(createdAt);
+    encoder.writeOption<Int64>(
+      huntLeadCharacterId,
+      (value) => encoder.writeU64(value),
+    );
+    encoder.writeU64(huntLeadSeq);
   }
 
   static Party decodeBsatn(BsatnDecoder decoder) {
@@ -34,6 +49,8 @@ class Party {
       id: decoder.readU64(),
       leaderCharacterId: decoder.readU64(),
       createdAt: decoder.readI64(),
+      huntLeadCharacterId: decoder.readOption<Int64>(() => decoder.readU64()),
+      huntLeadSeq: decoder.readU64(),
     );
   }
 
@@ -42,6 +59,8 @@ class Party {
       'id': id.toInt(),
       'leaderCharacterId': leaderCharacterId.toInt(),
       'createdAt': createdAt.toInt(),
+      'huntLeadCharacterId': huntLeadCharacterId?.toInt(),
+      'huntLeadSeq': huntLeadSeq.toInt(),
     };
   }
 
@@ -51,24 +70,40 @@ class Party {
         other is Party &&
             id == other.id &&
             leaderCharacterId == other.leaderCharacterId &&
-            createdAt == other.createdAt;
+            createdAt == other.createdAt &&
+            huntLeadCharacterId == other.huntLeadCharacterId &&
+            huntLeadSeq == other.huntLeadSeq;
   }
 
   @override
   int get hashCode {
-    return Object.hashAll([id, leaderCharacterId, createdAt]);
+    return Object.hashAll([
+      id,
+      leaderCharacterId,
+      createdAt,
+      huntLeadCharacterId,
+      huntLeadSeq,
+    ]);
   }
 
   @override
   String toString() {
-    return 'Party(id: $id, leaderCharacterId: $leaderCharacterId, createdAt: $createdAt)';
+    return 'Party(id: $id, leaderCharacterId: $leaderCharacterId, createdAt: $createdAt, huntLeadCharacterId: $huntLeadCharacterId, huntLeadSeq: $huntLeadSeq)';
   }
 
-  Party copyWith({Int64? id, Int64? leaderCharacterId, Int64? createdAt}) {
+  Party copyWith({
+    Int64? id,
+    Int64? leaderCharacterId,
+    Int64? createdAt,
+    Int64? huntLeadCharacterId,
+    Int64? huntLeadSeq,
+  }) {
     return Party(
       id: id ?? this.id,
       leaderCharacterId: leaderCharacterId ?? this.leaderCharacterId,
       createdAt: createdAt ?? this.createdAt,
+      huntLeadCharacterId: huntLeadCharacterId ?? this.huntLeadCharacterId,
+      huntLeadSeq: huntLeadSeq ?? this.huntLeadSeq,
     );
   }
 }

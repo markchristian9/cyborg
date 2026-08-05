@@ -88,6 +88,9 @@ class PartyPanel extends PositionComponent
   /// 닫기 버튼을 누르고 있는가.
   bool _pressedClose = false;
 
+  /// "주변 모두 부르기" 를 누르고 있는가.
+  bool _pressedInviteAll = false;
+
   final TextPaint _title = TextPaint(
     style: const TextStyle(
       color: GamePalette.textPrimary,
@@ -121,6 +124,7 @@ class PartyPanel extends PositionComponent
     _pressedRow = -1;
     _pressedButton = -1;
     _pressedClose = false;
+    _pressedInviteAll = false;
     size.y = 0;
   }
 
@@ -249,6 +253,23 @@ class PartyPanel extends PositionComponent
       Vector2(padding, 9),
     );
 
+    if (_showsInviteAll) {
+      final rect = _inviteAllRect;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(7)),
+        Paint()
+          ..color = _pressedInviteAll
+              ? GamePalette.hudBorder.withValues(alpha: 0.3)
+              : GamePalette.hudBorder.withValues(alpha: 0.16),
+      );
+      _muted.render(
+        canvas,
+        '주변 모두 부르기',
+        Vector2(rect.center.dx, rect.center.dy),
+        anchor: Anchor.center,
+      );
+    }
+
     _renderCloseButton(canvas);
 
     var y = headerHeight + padding;
@@ -314,6 +335,15 @@ class PartyPanel extends PositionComponent
   /// 닫기 버튼의 자리. 손가락으로 누를 수 있도록 그리는 ×보다 넉넉하다.
   Rect get _closeRect =>
       Rect.fromLTWH(panelWidth - padding - 26, 4, 26, headerHeight - 6);
+
+  /// 한 번에 부르기는 **부를 자격이 있을 때만** 보여 준다.
+  ///
+  /// 파티가 없으면 만들면서 부르고, 있으면 파티장만 부를 수 있다. 파티원에게
+  /// 보여 주면 누를 때마다 "파티장만 초대할 수 있다" 만 뜬다.
+  bool get _showsInviteAll => !_party.inParty || _party.isLeader;
+
+  Rect get _inviteAllRect =>
+      Rect.fromLTWH(panelWidth - padding - 26 - 108, 5, 104, headerHeight - 8);
 
   void _renderRow(Canvas canvas, _Row row, double y, {required bool pressed}) {
     if (pressed) {
@@ -436,6 +466,11 @@ class PartyPanel extends PositionComponent
       return;
     }
 
+    if (_showsInviteAll && _inviteAllRect.contains(Offset(local.x, local.y))) {
+      _pressedInviteAll = true;
+      return;
+    }
+
     final listTop = headerHeight + padding;
     final rows = _rows.take(maxVisibleRows).toList();
     final listBottom = listTop + rowHeight * rows.length;
@@ -460,12 +495,18 @@ class PartyPanel extends PositionComponent
     final row = _pressedRow;
     final button = _pressedButton;
     final closing = _pressedClose;
+    final invitingAll = _pressedInviteAll;
     _pressedRow = -1;
     _pressedButton = -1;
     _pressedClose = false;
+    _pressedInviteAll = false;
 
     if (closing) {
       close();
+      return;
+    }
+    if (invitingAll) {
+      game.inviteNearbyToParty();
       return;
     }
 
@@ -482,6 +523,7 @@ class PartyPanel extends PositionComponent
     _pressedRow = -1;
     _pressedButton = -1;
     _pressedClose = false;
+    _pressedInviteAll = false;
   }
 
   void _onRowSelected(_Row row) {

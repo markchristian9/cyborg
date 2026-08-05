@@ -5,21 +5,21 @@ import 'dart:async';
 import 'package:spacetimedb_sdk/codegen.dart';
 import 'reducers.dart';
 import 'reducer_args.dart';
-import 'regen_timer.dart';
-import 'monster_tick_timer.dart';
-import 'party_member.dart';
-import 'party_invite.dart';
-import 'loot.dart';
-import 'account_secret.dart';
-import 'monster.dart';
-import 'monster_kill.dart';
-import 'leaderboard_entry.dart';
-import 'session.dart';
-import 'player_character.dart';
-import 'account.dart';
 import 'monster_ai_timer.dart';
-import 'party.dart';
+import 'account.dart';
+import 'loot.dart';
+import 'monster_kill.dart';
+import 'account_secret.dart';
 import 'world_player.dart';
+import 'party_invite.dart';
+import 'leaderboard_entry.dart';
+import 'player_character.dart';
+import 'party_member.dart';
+import 'monster.dart';
+import 'monster_tick_timer.dart';
+import 'session.dart';
+import 'regen_timer.dart';
+import 'party.dart';
 
 class SpacetimeDbClient {
   SpacetimeDbClient._({
@@ -78,26 +78,22 @@ class SpacetimeDbClient {
     subscriptions.clearSyncErrors();
   }
 
-  TableCache<RegenTimer> get regenTimer {
-    return subscriptions.cache.getTableByTypedName<RegenTimer>('regen_timer');
-  }
-
-  TableCache<MonsterTickTimer> get monsterTickTimer {
-    return subscriptions.cache.getTableByTypedName<MonsterTickTimer>(
-      'monster_tick_timer',
+  TableCache<MonsterAiTimer> get monsterAiTimer {
+    return subscriptions.cache.getTableByTypedName<MonsterAiTimer>(
+      'monster_ai_timer',
     );
   }
 
-  TableCache<PartyMember> get partyMember {
-    return subscriptions.cache.getTableByTypedName<PartyMember>('party_member');
-  }
-
-  TableCache<PartyInvite> get partyInvite {
-    return subscriptions.cache.getTableByTypedName<PartyInvite>('party_invite');
+  TableCache<Account> get account {
+    return subscriptions.cache.getTableByTypedName<Account>('account');
   }
 
   TableCache<Loot> get loot {
     return subscriptions.cache.getTableByTypedName<Loot>('loot');
+  }
+
+  TableCache<MonsterKill> get monsterKill {
+    return subscriptions.cache.getTableByTypedName<MonsterKill>('monster_kill');
   }
 
   TableCache<AccountSecret> get accountSecret {
@@ -106,12 +102,12 @@ class SpacetimeDbClient {
     );
   }
 
-  TableCache<Monster> get monster {
-    return subscriptions.cache.getTableByTypedName<Monster>('monster');
+  TableCache<WorldPlayer> get worldPlayer {
+    return subscriptions.cache.getTableByTypedName<WorldPlayer>('world_player');
   }
 
-  TableCache<MonsterKill> get monsterKill {
-    return subscriptions.cache.getTableByTypedName<MonsterKill>('monster_kill');
+  TableCache<PartyInvite> get partyInvite {
+    return subscriptions.cache.getTableByTypedName<PartyInvite>('party_invite');
   }
 
   TableCache<LeaderboardEntry> get leaderboardEntry {
@@ -120,32 +116,36 @@ class SpacetimeDbClient {
     );
   }
 
-  TableCache<Session> get session {
-    return subscriptions.cache.getTableByTypedName<Session>('session');
-  }
-
   TableCache<PlayerCharacter> get playerCharacter {
     return subscriptions.cache.getTableByTypedName<PlayerCharacter>(
       'player_character',
     );
   }
 
-  TableCache<Account> get account {
-    return subscriptions.cache.getTableByTypedName<Account>('account');
+  TableCache<PartyMember> get partyMember {
+    return subscriptions.cache.getTableByTypedName<PartyMember>('party_member');
   }
 
-  TableCache<MonsterAiTimer> get monsterAiTimer {
-    return subscriptions.cache.getTableByTypedName<MonsterAiTimer>(
-      'monster_ai_timer',
+  TableCache<Monster> get monster {
+    return subscriptions.cache.getTableByTypedName<Monster>('monster');
+  }
+
+  TableCache<MonsterTickTimer> get monsterTickTimer {
+    return subscriptions.cache.getTableByTypedName<MonsterTickTimer>(
+      'monster_tick_timer',
     );
+  }
+
+  TableCache<Session> get session {
+    return subscriptions.cache.getTableByTypedName<Session>('session');
+  }
+
+  TableCache<RegenTimer> get regenTimer {
+    return subscriptions.cache.getTableByTypedName<RegenTimer>('regen_timer');
   }
 
   TableCache<Party> get party {
     return subscriptions.cache.getTableByTypedName<Party>('party');
-  }
-
-  TableCache<WorldPlayer> get worldPlayer {
-    return subscriptions.cache.getTableByTypedName<WorldPlayer>('world_player');
   }
 
   TableCache<LeaderboardEntry> get leaderboard {
@@ -249,60 +249,60 @@ class SpacetimeDbClient {
       queuePolicy: queuePolicy,
     );
 
-    subscriptionManager.cache.registerDecoder<RegenTimer>(
-      'regen_timer',
-      RegenTimerDecoder(),
-    );
-    subscriptionManager.cache.registerDecoder<MonsterTickTimer>(
-      'monster_tick_timer',
-      MonsterTickTimerDecoder(),
-    );
-    subscriptionManager.cache.registerDecoder<PartyMember>(
-      'party_member',
-      PartyMemberDecoder(),
-    );
-    subscriptionManager.cache.registerDecoder<PartyInvite>(
-      'party_invite',
-      PartyInviteDecoder(),
-    );
-    subscriptionManager.cache.registerDecoder<Loot>('loot', LootDecoder());
-    subscriptionManager.cache.registerDecoder<AccountSecret>(
-      'account_secret',
-      AccountSecretDecoder(),
-    );
-    subscriptionManager.cache.registerDecoder<Monster>(
-      'monster',
-      MonsterDecoder(),
-    );
-    subscriptionManager.cache.registerDecoder<MonsterKill>(
-      'monster_kill',
-      MonsterKillDecoder(),
-    );
-    subscriptionManager.cache.registerDecoder<LeaderboardEntry>(
-      'leaderboard_entry',
-      LeaderboardEntryDecoder(),
-    );
-    subscriptionManager.cache.registerDecoder<Session>(
-      'session',
-      SessionDecoder(),
-    );
-    subscriptionManager.cache.registerDecoder<PlayerCharacter>(
-      'player_character',
-      PlayerCharacterDecoder(),
+    subscriptionManager.cache.registerDecoder<MonsterAiTimer>(
+      'monster_ai_timer',
+      MonsterAiTimerDecoder(),
     );
     subscriptionManager.cache.registerDecoder<Account>(
       'account',
       AccountDecoder(),
     );
-    subscriptionManager.cache.registerDecoder<MonsterAiTimer>(
-      'monster_ai_timer',
-      MonsterAiTimerDecoder(),
+    subscriptionManager.cache.registerDecoder<Loot>('loot', LootDecoder());
+    subscriptionManager.cache.registerDecoder<MonsterKill>(
+      'monster_kill',
+      MonsterKillDecoder(),
     );
-    subscriptionManager.cache.registerDecoder<Party>('party', PartyDecoder());
+    subscriptionManager.cache.registerDecoder<AccountSecret>(
+      'account_secret',
+      AccountSecretDecoder(),
+    );
     subscriptionManager.cache.registerDecoder<WorldPlayer>(
       'world_player',
       WorldPlayerDecoder(),
     );
+    subscriptionManager.cache.registerDecoder<PartyInvite>(
+      'party_invite',
+      PartyInviteDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<LeaderboardEntry>(
+      'leaderboard_entry',
+      LeaderboardEntryDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<PlayerCharacter>(
+      'player_character',
+      PlayerCharacterDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<PartyMember>(
+      'party_member',
+      PartyMemberDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<Monster>(
+      'monster',
+      MonsterDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<MonsterTickTimer>(
+      'monster_tick_timer',
+      MonsterTickTimerDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<Session>(
+      'session',
+      SessionDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<RegenTimer>(
+      'regen_timer',
+      RegenTimerDecoder(),
+    );
+    subscriptionManager.cache.registerDecoder<Party>('party', PartyDecoder());
 
     subscriptionManager.cache.registerDecoder<LeaderboardEntry>(
       'leaderboard',
@@ -341,6 +341,7 @@ class SpacetimeDbClient {
       WorldPlayerDecoder(),
     );
 
+    subscriptionManager.reducerRegistry.register(acceptHuntLeadDef);
     subscriptionManager.reducerRegistry.register(acceptInviteDef);
     subscriptionManager.reducerRegistry.register(attackMonsterDef);
     subscriptionManager.reducerRegistry.register(attackPlayerDef);
@@ -353,6 +354,7 @@ class SpacetimeDbClient {
     subscriptionManager.reducerRegistry.register(disbandPartyDef);
     subscriptionManager.reducerRegistry.register(ensureWorldPopulatedDef);
     subscriptionManager.reducerRegistry.register(enterWorldDef);
+    subscriptionManager.reducerRegistry.register(inviteNearbyDef);
     subscriptionManager.reducerRegistry.register(inviteToPartyDef);
     subscriptionManager.reducerRegistry.register(kickMemberDef);
     subscriptionManager.reducerRegistry.register(leavePartyDef);
@@ -369,6 +371,8 @@ class SpacetimeDbClient {
     subscriptionManager.reducerRegistry.register(resetTimersDef);
     subscriptionManager.reducerRegistry.register(selectCharacterDef);
     subscriptionManager.reducerRegistry.register(setFollowingDef);
+    subscriptionManager.reducerRegistry.register(startHuntLeadDef);
+    subscriptionManager.reducerRegistry.register(stopHuntLeadDef);
     subscriptionManager.reducerRegistry.register(teleportToDef);
 
     final client = SpacetimeDbClient._(

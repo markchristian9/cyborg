@@ -39,12 +39,16 @@ class SpacetimePartySession extends PartySession {
   @override
   bool get isAvailable => _querySetId != null;
 
-  /// 멤버 목록과 초대 중 어느 쪽이 바뀌어도 화면을 다시 맞춘다.
+  /// 파티·멤버·초대 중 어느 하나라도 바뀌면 화면을 다시 맞춘다.
   ///
-  /// 파티 자체(`my_party`)는 별도 신호를 주지 않는다 — 파티가 생기거나 사라지면
-  /// 멤버 목록도 반드시 함께 바뀌므로 그쪽만 들으면 놓치는 변화가 없다.
+  /// **`my_party` 를 빼면 안 된다.** 예전에는 "파티가 생기거나 사라지면 멤버
+  /// 목록도 함께 바뀐다" 는 이유로 뺐는데, 이끌기 상태가 `Party` 행에만 있으므로
+  /// 그 전제가 깨졌다 — 누가 이끌기를 시작해도 멤버 행은 그대로다.
   @override
-  Listenable get changes => Listenable.merge([_memberRows, _inviteRows]);
+  Listenable get changes =>
+      Listenable.merge([_partyRows, _memberRows, _inviteRows]);
+
+  ValueListenable<List<gen.Party>> get _partyRows => _client.party.rows;
 
   @override
   Future<void> attach() async {
@@ -86,6 +90,12 @@ class SpacetimePartySession extends PartySession {
 
   @override
   int? get leaderCharacterId => _party?.leaderCharacterId.toInt();
+
+  @override
+  int? get huntLeadCharacterId => _party?.huntLeadCharacterId?.toInt();
+
+  @override
+  int get huntLeadSeq => _party?.huntLeadSeq.toInt() ?? 0;
 
   @override
   List<PartyMemberInfo> get members {
@@ -131,6 +141,20 @@ class SpacetimePartySession extends PartySession {
   @override
   Future<void> setFollowing(bool following) =>
       _call(() => _client.reducers.setFollowing(following: following));
+
+  @override
+  Future<void> startHuntLead() =>
+      _call(() => _client.reducers.startHuntLead());
+
+  @override
+  Future<void> stopHuntLead() => _call(() => _client.reducers.stopHuntLead());
+
+  @override
+  Future<void> acceptHuntLead(int leadSeq) =>
+      _call(() => _client.reducers.acceptHuntLead(leadSeq: Int64(leadSeq)));
+
+  @override
+  Future<void> inviteNearby() => _call(() => _client.reducers.inviteNearby());
 
   @override
   Future<void> disband() => _call(() => _client.reducers.disbandParty());

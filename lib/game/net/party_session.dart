@@ -149,6 +149,13 @@ abstract class PartySession {
   /// 월드에 있는 다른 사람을 초대한다. 파티가 없으면 서버가 만들어 준다.
   Future<void> invite(int targetCharacterId) async {}
 
+  /// 주변에 있는 요원을 한 번에 부른다.
+  ///
+  /// 이미 파티가 있는 사람은 빼고 보낸다 — 거절할 수밖에 없는 초대를 보내면
+  /// 받는 쪽에는 광고와 구별되지 않고, 보내는 쪽은 "왜 다들 거절하지" 라고
+  /// 오해한다. 어디까지가 주변인지는 서버가 정한다.
+  Future<void> inviteNearby() async {}
+
   /// 받은 초대를 수락한다.
   Future<void> accept(int inviteId) async {}
 

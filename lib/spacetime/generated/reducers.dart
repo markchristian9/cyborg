@@ -11,6 +11,28 @@ class Reducers {
 
   final ReducerEmitter _reducerEmitter;
 
+  /// Calls the `accept_hunt_lead` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> acceptHuntLead({
+    required Int64 leadSeq,
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    encoder.writeU64(leadSeq);
+    return await _reducerCaller.call(
+      acceptHuntLeadDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
   /// Calls the `accept_invite` reducer.
   ///
   /// Returns a [TransactionResult] on success. Throws
@@ -271,6 +293,26 @@ class Reducers {
     encoder.writeF32(gridY);
     return await _reducerCaller.call(
       enterWorldDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
+  /// Calls the `invite_nearby` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> inviteNearby({
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    return await _reducerCaller.call(
+      inviteNearbyDef.name,
       encoder.toBytes(),
       optimisticChanges: optimisticChanges,
       dropIfOffline: dropIfOffline,
@@ -627,6 +669,46 @@ class Reducers {
     );
   }
 
+  /// Calls the `start_hunt_lead` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> startHuntLead({
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    return await _reducerCaller.call(
+      startHuntLeadDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
+  /// Calls the `stop_hunt_lead` reducer.
+  ///
+  /// Returns a [TransactionResult] on success. Throws
+  /// [SpacetimeDbReducerException] if the reducer returns `Failed` or
+  /// `InternalError`. The returned status is one of `Committed`,
+  /// `Pending` (queued to offline storage), or `Dropped` (skipped via
+  /// `dropIfOffline: true` while offline).
+  Future<TransactionResult> stopHuntLead({
+    List<OptimisticChange>? optimisticChanges,
+    bool dropIfOffline = false,
+  }) async {
+    final encoder = BsatnEncoder();
+    return await _reducerCaller.call(
+      stopHuntLeadDef.name,
+      encoder.toBytes(),
+      optimisticChanges: optimisticChanges,
+      dropIfOffline: dropIfOffline,
+    );
+  }
+
   /// Calls the `teleport_to` reducer.
   ///
   /// Returns a [TransactionResult] on success. Throws
@@ -651,6 +733,18 @@ class Reducers {
       optimisticChanges: optimisticChanges,
       dropIfOffline: dropIfOffline,
     );
+  }
+
+  StreamSubscription<void> onAcceptHuntLead(
+    void Function(EventContext ctx, Int64 leadSeq) callback,
+  ) {
+    return _reducerEmitter.on(acceptHuntLeadDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! AcceptHuntLeadArgs) return;
+      callback(ctx, args.leadSeq);
+    });
   }
 
   StreamSubscription<void> onAcceptInvite(
@@ -797,6 +891,18 @@ class Reducers {
       final args = event.reducerArgs;
       if (args is! EnterWorldArgs) return;
       callback(ctx, args.gridX, args.gridY);
+    });
+  }
+
+  StreamSubscription<void> onInviteNearby(
+    void Function(EventContext ctx) callback,
+  ) {
+    return _reducerEmitter.on(inviteNearbyDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! InviteNearbyArgs) return;
+      callback(ctx);
     });
   }
 
@@ -994,6 +1100,30 @@ class Reducers {
       final args = event.reducerArgs;
       if (args is! SetFollowingArgs) return;
       callback(ctx, args.following);
+    });
+  }
+
+  StreamSubscription<void> onStartHuntLead(
+    void Function(EventContext ctx) callback,
+  ) {
+    return _reducerEmitter.on(startHuntLeadDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! StartHuntLeadArgs) return;
+      callback(ctx);
+    });
+  }
+
+  StreamSubscription<void> onStopHuntLead(
+    void Function(EventContext ctx) callback,
+  ) {
+    return _reducerEmitter.on(stopHuntLeadDef).listen((EventContext ctx) {
+      final event = ctx.event;
+      if (event is! ReducerEvent) return;
+      final args = event.reducerArgs;
+      if (args is! StopHuntLeadArgs) return;
+      callback(ctx);
     });
   }
 

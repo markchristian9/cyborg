@@ -1068,6 +1068,13 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     unawaited(_runPartyAction(() => party.invite(characterId)));
   }
 
+  /// 주변에 있는 요원을 한 번에 부른다.
+  void inviteNearbyToParty() {
+    GameAudio.play(Sfx.uiClick);
+    _showBanner('주변 요원을 부른다');
+    unawaited(_runPartyAction(party.inviteNearby));
+  }
+
   /// 받은 초대를 수락한다.
   void acceptPartyInvite(PartyInviteInfo invite) {
     GameAudio.play(Sfx.uiClick);

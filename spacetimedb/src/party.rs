@@ -72,6 +72,13 @@ pub const MAX_PARTY_SIZE: usize = 12;
 /// 떠 있으면, 한참 전에 지나간 제안을 수락해 엉뚱한 곳으로 끌려간다.
 const INVITE_TTL_MICROS: i64 = 20_000_000;
 
+/// 한 번에 부를 때 닿는 거리(타일 = m).
+///
+/// 눈앞에 함께 서 있는 사람들을 부르는 기능이라 화면에 보이는 범위를 넘지 않는다.
+/// 넓히면 얼굴도 못 본 사람에게 초대가 날아가고, 받는 쪽에는 그것이 광고와
+/// 구별되지 않는다.
+const NEARBY_INVITE_RANGE_TILES: f32 = 30.0;
+
 // ── 표 ──────────────────────────────────────────────────────────────────
 
 /// 파티 하나.
@@ -314,39 +321,7 @@ pub fn invite_to_party(ctx: &ReducerContext, target_character_id: u64) -> Result
     }
 
     // 파티가 없으면 지금 만든다. 있으면 파티장만 초대할 수 있다.
-    let party_id = match ctx.db.party_member().character_id().find(character_id) {
-        Some(member) => {
-            let party = ctx
-                .db
-                .party()
-                .id()
-                .find(member.party_id)
-                .ok_or_else(|| "파티를 찾을 수 없다.".to_string())?;
-            if party.leader_character_id != character_id {
-                return Err("파티장만 초대할 수 있다.".to_string());
-            }
-            if party_size(ctx, party.id) >= MAX_PARTY_SIZE {
-                return Err(format!("파티가 가득 찼다(최대 {MAX_PARTY_SIZE}명)."));
-            }
-            party.id
-        }
-        None => {
-            let party = ctx.db.party().insert(Party {
-                id: 0,
-                leader_character_id: character_id,
-                created_at: ctx.timestamp,
-                hunt_lead_character_id: None,
-                hunt_lead_seq: 0,
-            });
-            ctx.db.party_member().insert(PartyMember {
-                character_id,
-                party_id: party.id,
-                joined_at: ctx.timestamp,
-                following_character_id: None,
-            });
-            party.id
-        }
-    };
+    let party_id = ensure_party(ctx, character_id)?;
 
     sweep_expired_invites(ctx, target_character_id);
 
@@ -379,6 +354,107 @@ pub fn invite_to_party(ctx: &ReducerContext, target_character_id: u64) -> Result
         expires_at: ctx.timestamp + invite_ttl(),
     });
 
+    Ok(())
+}
+
+/// 주변에 있는 요원을 **한 번에** 부른다.
+///
+/// 한 명씩 눌러 부르는 것과 결과는 같지만, 여럿이 함께 서 있는 자리에서는 그
+/// 반복이 곧 일이 된다.
+///
+/// **이미 파티가 있는 사람에게는 보내지 않는다.** 받는 쪽에서 거절할 수밖에 없는
+/// 초대는 보내지 않는 편이 낫고, 보내는 쪽도 "왜 다들 거절하지" 라는 오해를 하지
+/// 않는다. 자리가 남는 만큼만 부르는 것도 같은 이유다.
+///
+/// 몇 명에게 보냈는지 세어 돌려주지 않는 이유는 reducer 가 값을 돌려줄 수 없기
+/// 때문이다. 화면은 초대가 오간 결과를 표로 보게 된다.
+#[spacetimedb::reducer]
+pub fn invite_nearby(ctx: &ReducerContext) -> Result<(), String> {
+    let character_id = require_character(ctx)?;
+
+    let me = ctx
+        .db
+        .world_player()
+        .character_id()
+        .find(character_id)
+        .ok_or_else(|| "먼저 월드에 들어가야 한다.".to_string())?;
+
+    let party_id = ensure_party(ctx, character_id)?;
+
+    // 남은 자리를 먼저 센다. 자리보다 많이 부르면 뒤에 수락한 사람이 문 앞에서
+    // 거절당한다.
+    let mut room = MAX_PARTY_SIZE.saturating_sub(party_size(ctx, party_id));
+    if room == 0 {
+        return Err(format!("파티가 가득 찼다(최대 {MAX_PARTY_SIZE}명)."));
+    }
+
+    let range_sq = NEARBY_INVITE_RANGE_TILES * NEARBY_INVITE_RANGE_TILES;
+    let mut invited = 0u32;
+
+    // 가까운 사람부터 부른다. 자리가 모자랄 때 누가 뽑히는지가 거리로 정해져야
+    // 표를 훑는 순서에 좌우되지 않는다.
+    let mut candidates: Vec<(u64, u64)> = Vec::new();
+    for other in ctx.db.world_player().iter() {
+        let target = other.character_id;
+        if target == character_id {
+            continue;
+        }
+        let d = dist_sq(me.grid_x, me.grid_y, other.grid_x, other.grid_y);
+        if d > range_sq {
+            continue;
+        }
+        // 이미 어딘가에 속한 사람은 부르지 않는다.
+        if ctx.db.party_member().character_id().find(target).is_some() {
+            continue;
+        }
+        // 거리를 정수로 바꿔 정렬 기준으로 쓴다. 같은 거리면 번호로 가른다.
+        candidates.push(((d * 1000.0) as u64, target));
+    }
+    candidates.sort_unstable();
+
+    let name = character_name(ctx, character_id);
+
+    for (_, target) in candidates {
+        if room == 0 {
+            break;
+        }
+        sweep_expired_invites(ctx, target);
+
+        // 이미 보낸 초대가 살아 있으면 시각만 미룬다. 두 번 보내면 화면에 두 개가
+        // 뜬다.
+        if let Some(existing) = ctx
+            .db
+            .party_invite()
+            .by_target()
+            .filter(target)
+            .find(|invite| invite.party_id == party_id)
+        {
+            ctx.db.party_invite().id().update(PartyInvite {
+                created_at: ctx.timestamp,
+                expires_at: ctx.timestamp + invite_ttl(),
+                ..existing
+            });
+            continue;
+        }
+
+        ctx.db.party_invite().insert(PartyInvite {
+            id: 0,
+            party_id,
+            from_character_id: character_id,
+            from_name: name.clone(),
+            to_character_id: target,
+            created_at: ctx.timestamp,
+            expires_at: ctx.timestamp + invite_ttl(),
+        });
+        room -= 1;
+        invited += 1;
+    }
+
+    if invited == 0 {
+        return Err("주변에 부를 수 있는 요원이 없다.".to_string());
+    }
+
+    log::info!("{character_id} 가 주변 {invited} 명을 파티로 불렀다.");
     Ok(())
 }
 
@@ -852,6 +928,54 @@ fn clear_invites_for(ctx: &ReducerContext, character_id: u64) {
         .collect();
     for id in ids {
         ctx.db.party_invite().id().delete(id);
+    }
+}
+
+/// 두 점 사이 거리의 제곱. 제곱근을 피해 비교만 한다.
+fn dist_sq(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let dx = ax - bx;
+    let dy = ay - by;
+    dx * dx + dy * dy
+}
+
+/// 부르는 사람의 파티를 확보한다. 없으면 만들고, 있으면 자격을 본다.
+///
+/// 초대는 두 갈래([`invite_to_party`]·[`invite_nearby`])인데 앞단이 똑같다 —
+/// 파티가 없으면 만들고, 있으면 파티장인지와 자리가 남았는지를 본다. 한 곳에
+/// 모아 두 갈래가 어긋나지 않게 한다.
+fn ensure_party(ctx: &ReducerContext, character_id: u64) -> Result<u64, String> {
+    match ctx.db.party_member().character_id().find(character_id) {
+        Some(member) => {
+            let party = ctx
+                .db
+                .party()
+                .id()
+                .find(member.party_id)
+                .ok_or_else(|| "파티를 찾을 수 없다.".to_string())?;
+            if party.leader_character_id != character_id {
+                return Err("파티장만 초대할 수 있다.".to_string());
+            }
+            if party_size(ctx, party.id) >= MAX_PARTY_SIZE {
+                return Err(format!("파티가 가득 찼다(최대 {MAX_PARTY_SIZE}명)."));
+            }
+            Ok(party.id)
+        }
+        None => {
+            let party = ctx.db.party().insert(Party {
+                id: 0,
+                leader_character_id: character_id,
+                created_at: ctx.timestamp,
+                hunt_lead_character_id: None,
+                hunt_lead_seq: 0,
+            });
+            ctx.db.party_member().insert(PartyMember {
+                character_id,
+                party_id: party.id,
+                joined_at: ctx.timestamp,
+                following_character_id: None,
+            });
+            Ok(party.id)
+        }
     }
 }
 

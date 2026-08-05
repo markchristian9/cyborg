@@ -2,6 +2,23 @@
 
 import 'package:spacetimedb_sdk/codegen.dart';
 
+class AcceptHuntLeadArgs {
+  AcceptHuntLeadArgs({required this.leadSeq});
+
+  final Int64 leadSeq;
+}
+
+class AcceptHuntLeadArgsDecoder
+    implements ReducerArgDecoder<AcceptHuntLeadArgs> {
+  const AcceptHuntLeadArgsDecoder();
+
+  @override
+  AcceptHuntLeadArgs decode(BsatnDecoder decoder) {
+    final leadSeq = decoder.readU64();
+    return AcceptHuntLeadArgs(leadSeq: leadSeq);
+  }
+}
+
 class AcceptInviteArgs {
   AcceptInviteArgs({required this.inviteId});
 
@@ -204,6 +221,19 @@ class EnterWorldArgsDecoder implements ReducerArgDecoder<EnterWorldArgs> {
     final gridX = decoder.readF32();
     final gridY = decoder.readF32();
     return EnterWorldArgs(gridX: gridX, gridY: gridY);
+  }
+}
+
+class InviteNearbyArgs {
+  InviteNearbyArgs();
+}
+
+class InviteNearbyArgsDecoder implements ReducerArgDecoder<InviteNearbyArgs> {
+  const InviteNearbyArgsDecoder();
+
+  @override
+  InviteNearbyArgs decode(BsatnDecoder decoder) {
+    return InviteNearbyArgs();
   }
 }
 
@@ -474,6 +504,32 @@ class SetFollowingArgsDecoder implements ReducerArgDecoder<SetFollowingArgs> {
   }
 }
 
+class StartHuntLeadArgs {
+  StartHuntLeadArgs();
+}
+
+class StartHuntLeadArgsDecoder implements ReducerArgDecoder<StartHuntLeadArgs> {
+  const StartHuntLeadArgsDecoder();
+
+  @override
+  StartHuntLeadArgs decode(BsatnDecoder decoder) {
+    return StartHuntLeadArgs();
+  }
+}
+
+class StopHuntLeadArgs {
+  StopHuntLeadArgs();
+}
+
+class StopHuntLeadArgsDecoder implements ReducerArgDecoder<StopHuntLeadArgs> {
+  const StopHuntLeadArgsDecoder();
+
+  @override
+  StopHuntLeadArgs decode(BsatnDecoder decoder) {
+    return StopHuntLeadArgs();
+  }
+}
+
 class TeleportToArgs {
   TeleportToArgs({
     required this.destination,
@@ -500,6 +556,10 @@ class TeleportToArgsDecoder implements ReducerArgDecoder<TeleportToArgs> {
   }
 }
 
+const acceptHuntLeadDef = ReducerDef<AcceptHuntLeadArgs>(
+  'accept_hunt_lead',
+  AcceptHuntLeadArgsDecoder(),
+);
 const acceptInviteDef = ReducerDef<AcceptInviteArgs>(
   'accept_invite',
   AcceptInviteArgsDecoder(),
@@ -547,6 +607,10 @@ const ensureWorldPopulatedDef = ReducerDef<EnsureWorldPopulatedArgs>(
 const enterWorldDef = ReducerDef<EnterWorldArgs>(
   'enter_world',
   EnterWorldArgsDecoder(),
+);
+const inviteNearbyDef = ReducerDef<InviteNearbyArgs>(
+  'invite_nearby',
+  InviteNearbyArgsDecoder(),
 );
 const inviteToPartyDef = ReducerDef<InviteToPartyArgs>(
   'invite_to_party',
@@ -602,6 +666,14 @@ const selectCharacterDef = ReducerDef<SelectCharacterArgs>(
 const setFollowingDef = ReducerDef<SetFollowingArgs>(
   'set_following',
   SetFollowingArgsDecoder(),
+);
+const startHuntLeadDef = ReducerDef<StartHuntLeadArgs>(
+  'start_hunt_lead',
+  StartHuntLeadArgsDecoder(),
+);
+const stopHuntLeadDef = ReducerDef<StopHuntLeadArgs>(
+  'stop_hunt_lead',
+  StopHuntLeadArgsDecoder(),
 );
 const teleportToDef = ReducerDef<TeleportToArgs>(
   'teleport_to',
