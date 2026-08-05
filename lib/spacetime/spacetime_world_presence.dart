@@ -31,21 +31,27 @@ class SpacetimeWorldPresence extends WorldPresence {
   /// 사람이 걷는 속도(초당 3.6타일)에서 1/24 초면 0.15타일 — 남의 화면에서
   /// 보간이 메워야 할 구간이 몸 반 칸도 되지 않는다.
   ///
-  /// **0.2초(5 Hz) → 0.05초(20 Hz) → 1/24 초로 올려 왔다.** 보간은 갱신 간격만큼의
-  /// 지연을 반드시 안고 가므로, 5 Hz 에서는 아무리 매끄럽게 그려도 남이 방향을
-  /// 튼 것이 0.2초 뒤에 닿았다. 서버 `MONSTER_AI_MICROS`(41,667μs)와 같은
-  /// 리듬이라 PC 와 몹이 함께 갱신된다.
-  static const Duration _fastInterval = Duration(microseconds: 41667);
-
-  /// 붐빌 때 내려가는 하한. **8 Hz**.
+  /// **0.2초(5 Hz) → 0.05초 → 1/24 초까지 올렸다가 0.1초(10 Hz)로 되돌렸다.**
   ///
-  /// 이보다 더 낮추지 않는 이유는 보간이 메워야 할 구간이 0.45 타일이 되어,
+  /// 24 Hz 는 이 서버가 감당하지 못했다. 실측하면 `move_to` 왕복이 중앙값
+  /// 300 ms, 최악 2.4 초다. 보내는 쪽만 빨라지고 도착은 그대로인 셈이라, 남는
+  /// 것은 서버에 쌓이는 큐뿐이었다 — 그 밀림이 예측과 서버 좌표를 한 타일 넘게
+  /// 벌려 화면을 뒤로 끌었다(고무줄).
+  ///
+  /// 10 Hz 는 서버가 실제로 소화하는 속도에 가깝고, 보간이 메울 구간은 0.36
+  /// 타일이라 걷는 모습이 각지지 않는다. 다시 올리려면 **먼저 응답 시간을
+  /// 재고**, 그 값보다 주기가 길어야 의미가 있다.
+  static const Duration _fastInterval = Duration(microseconds: 100000);
+
+  /// 붐빌 때 내려가는 하한. **4 Hz**.
+  ///
+  /// 이보다 더 낮추지 않는 이유는 보간이 메워야 할 구간이 0.9 타일이 되어,
   /// 방향을 바꾸며 뛰는 사람의 궤적이 눈에 띄게 각지기 때문이다.
-  static const Duration _slowInterval = Duration(microseconds: 125000);
+  static const Duration _slowInterval = Duration(microseconds: 250000);
 
   /// 이 인원까지는 [_fastInterval] 을 그대로 쓴다.
   ///
-  /// 8 명이 24 Hz 로 서로를 갱신하면 초당 1,536 행이다. 그 정도가 한 사람이
+  /// 8 명이 10 Hz 로 서로를 갱신하면 초당 640 행이다. 그 정도가 한 사람이
   /// 감당할 만한 몫이고, 파티 하나가 통째로 들어가는 크기이기도 하다.
   static const int _calmCrowd = 8;
 
@@ -125,8 +131,6 @@ class SpacetimeWorldPresence extends WorldPresence {
 
   /// 마지막으로 보낸 방향(정규화됨).
   Vector2? _lastSentFacing;
-  bool _inFlight = false;
-
   /// 월드에 들어가 있는지. 들어가기 전에는 좌표를 보내도 서버가 거절한다.
   bool _entered = false;
 
@@ -228,9 +232,9 @@ class SpacetimeWorldPresence extends WorldPresence {
     // 영영 사라진 채로 남는다.**
     unawaited(_ensureStillInWorld(grid));
 
-    // 좌표 보고와 **별개로** 확인한다. 아래 `_inFlight`·주기 검사에 걸려 보고를
-    // 건너뛰는 동안에도 청크는 넘어갈 수 있고, 그때 재구독을 놓치면 주변이
-    // 통째로 비어 보인다.
+    // 좌표 보고와 **별개로** 확인한다. 아래 주기 검사에 걸려 보고를 건너뛰는
+    // 동안에도 청크는 넘어갈 수 있고, 그때 재구독을 놓치면 주변이 통째로
+    // 비어 보인다.
     //
     // 기준은 **서버가 아는 내 자리**다. 화면의 예측 좌표를 쓰면, 서버가 나를
     // 옮겼을 때(입장 좌표 보정·사망 재가동·텔레포트) 구독만 옛 자리에 남는다.
@@ -238,8 +242,6 @@ class SpacetimeWorldPresence extends WorldPresence {
     unawaited(_maybeResubscribe(_myRow == null
         ? grid
         : Vector2(_myRow!.gridX, _myRow!.gridY)));
-
-    if (_inFlight) return;
 
     final now = DateTime.now();
     final last = _lastSentAt;
@@ -390,21 +392,29 @@ class SpacetimeWorldPresence extends WorldPresence {
   /// 재입장이 진행 중인지. 겹쳐 보내지 않기 위한 빗장이다.
   bool _reentering = false;
 
-  Future<void> _send(Vector2 grid, Vector2 facing) async {
-    _inFlight = true;
-    try {
-      await _client.reducers.moveTo(
-        gridX: grid.x,
-        gridY: grid.y,
-        facingX: facing.x,
-        facingY: facing.y,
-      );
-    } on SpacetimeDbException {
-      // 한 번 놓쳐도 다음 주기가 따라잡는다. 좌표는 절대값이라 밀린 것을
-      // 다시 보낼 필요가 없다.
-    } finally {
-      _inFlight = false;
-    }
+  /// 좌표와 방향을 서버에 밀어 넣는다. **답을 기다리지 않는다.**
+  ///
+  /// 기다리면 왕복 지연이 그대로 보고 주기가 된다. 실측하면 이 왕복이 300 ms
+  /// 이고, 그중 대부분은 서버 처리가 아니라 네트워크다 — 주기를 아무리 짧게
+  /// 잡아도 답을 기다리는 한 초당 세 번밖에 보내지 못한다. 그 사이 예측은
+  /// 한 타일 넘게 앞서가고, 뒤늦게 도착한 옛 좌표가 화면을 뒤로 끈다.
+  ///
+  /// 순서는 기다리지 않아도 지켜진다. reducer 호출은 한 연결 위를 보낸 차례대로
+  /// 흐르고, 서버는 받은 순서대로 처리한다. 흐름은 [_interval] 이 조절하므로
+  /// 큐가 무한정 쌓이지도 않는다.
+  ///
+  /// 실패는 버린다. 좌표는 절대값이라 놓친 것을 다시 보낼 필요가 없고, 다음
+  /// 주기가 곧 따라잡는다. 정말로 월드에서 빠진 경우는
+  /// [_ensureStillInWorld] 가 알아채 다시 들어간다.
+  void _send(Vector2 grid, Vector2 facing) {
+    _client.reducers
+        .moveTo(
+          gridX: grid.x,
+          gridY: grid.y,
+          facingX: facing.x,
+          facingY: facing.y,
+        )
+        .ignore();
   }
 
   @override

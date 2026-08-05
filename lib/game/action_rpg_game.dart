@@ -637,6 +637,9 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 방향도 함께 보낸다. 멈춰 서서 몸만 돌리는 동작은 좌표에 남지 않아,
     // 이것이 없으면 남의 화면에서 나는 마지막으로 걸었던 쪽만 계속 바라본다.
     presence.report(player.grid, player.facing);
+    // 보낸 자리를 자취에 남긴다. 서버가 이 자취를 따라오는 동안에는 화면을
+    // 당기지 않아야 걸음이 매끄럽다([Player.reconcileServerGrid]).
+    player.recordReportedGrid(player.grid);
     _syncRemotePlayers();
     // 서버가 확정한 내 상태를 몸에 옮겨 담는다. 보고 **뒤에** 두는 이유는,
     // 방금 보낸 좌표에 대한 답이 아직 오지 않았기 때문이다 — 먼저 두면 한 프레임

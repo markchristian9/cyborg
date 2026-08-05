@@ -850,7 +850,16 @@ class Player extends IsoEntity with Damageable {
   /// [dt] 는 이번 프레임의 시간이다. 프레임률이 달라도 같은 속도로 수렴하도록
   /// 계수를 시간으로 환산한다.
   void reconcileServerGrid(Vector2 serverGrid, double dt) {
-    final error = serverGrid.distanceTo(grid);
+    // **서버 좌표는 내 과거다.** 보낸 값이 처리되어 구독으로 돌아오기까지 한
+    // 왕복이 걸리고(실측 300~500 ms), 그동안 나는 계속 걷는다. 그래서 지금
+    // 위치와 견주면 늘 한두 타일 벌어져 있는데, 그것은 어긋남이 아니라 **지연**
+    // 이다. 그 간격을 오차로 보고 당기면 걸을수록 뒤로 끌린다 — 고무줄이다.
+    //
+    // 그래서 지금 위치가 아니라 **내가 지나온 자취**와 견준다. 서버가 그 자취
+    // 위 어딘가에 있으면 나를 따라오는 중이니 손대지 않는다. 자취에서 벗어나
+    // 있을 때만 진짜로 어긋난 것이다 — 벽을 뚫으려 했거나, 서버가 속도 상한으로
+    // 잘랐거나, 텔레포트·재가동으로 옮겨졌을 때다.
+    final error = _distanceFromTrail(serverGrid);
     if (error < _reconcileDeadzone) return;
 
     // 크게 어긋났으면 보정이 아니라 순간이동이다. 텔레포트·재가동·긴 끊김이
@@ -860,11 +869,16 @@ class Player extends IsoEntity with Damageable {
       grid.setFrom(serverGrid);
       clearMoveTarget();
       syncTransform();
+      _trail.clear();
       return;
     }
 
     // 그 외에는 부드럽게 당긴다. 오차가 클수록 세게 당겨, 평소 이동은
     // 건드리지 않으면서 벌어진 차이는 확실히 좁힌다.
+    //
+    // 자취를 지운다 — 어긋남이 확인된 이상 옛 자취는 더 이상 "따라오는 중" 의
+    // 증거가 아니고, 남겨 두면 다음 판정에서 그 옛 자리가 어긋남을 가린다.
+    _trail.clear();
     final strength = error > _reconcileHardError
         ? _reconcileHardRate
         : _reconcileSoftRate;
@@ -875,14 +889,55 @@ class Player extends IsoEntity with Damageable {
     );
   }
 
-  /// 이보다 작은 오차는 무시한다. 늘 조금은 어긋나 있고, 그때마다 당기면 떨린다.
-  static const double _reconcileDeadzone = 0.12;
+  /// 자취에서 이만큼 벗어나야 보정한다(타일).
+  ///
+  /// 자취와 견주므로 왕복 지연은 이미 걸러진다. 남는 것은 좌표를 띄엄띄엄
+  /// 보내는 데서 오는 톱니(보고 주기 0.1 초 × 초당 3.6 타일 = 0.36 타일)뿐이라
+  /// 작게 잡아도 된다.
+  static const double _reconcileDeadzone = 0.5;
+
+  /// 내가 지나온 자취. 서버에 보고한 좌표를 시각과 함께 남긴다.
+  ///
+  /// 서버가 이 위 어딘가에 있으면 "따라오는 중" 이고, 벗어나 있으면 "어긋남" 이다.
+  final List<({DateTime at, Vector2 grid})> _trail = [];
+
+  /// 자취를 남겨 두는 시간. 왕복 지연의 몇 배는 되어야 한다.
+  static const Duration _trailWindow = Duration(seconds: 3);
+
+  /// 서버에 보고한 좌표를 자취에 남긴다.
+  ///
+  /// 보고하는 쪽에서 부른다 — 서버가 실제로 받는 것이 이 값들이므로, 화면의
+  /// 매 프레임 위치가 아니라 **보낸 값**을 남겨야 견줄 수 있다.
+  void recordReportedGrid(Vector2 reported) {
+    final now = DateTime.now();
+    _trail.add((at: now, grid: reported.clone()));
+    // 오래된 것은 버린다. 남겨 두면 한참 전에 지나온 자리가 지금의 어긋남을
+    // 가려 준다.
+    final cutoff = now.subtract(_trailWindow);
+    _trail.removeWhere((entry) => entry.at.isBefore(cutoff));
+  }
+
+  /// 자취에서 [point] 까지의 가장 가까운 거리.
+  ///
+  /// 자취가 비어 있으면(막 태어났거나 오프라인) 지금 위치와 견준다.
+  double _distanceFromTrail(Vector2 point) {
+    if (_trail.isEmpty) return point.distanceTo(grid);
+    var best = point.distanceTo(grid);
+    for (final entry in _trail) {
+      final d = point.distanceTo(entry.grid);
+      if (d < best) best = d;
+    }
+    return best;
+  }
 
   /// 이보다 크게 어긋나면 보정 대신 즉시 맞춘다(타일).
   static const double _reconcileSnapDistance = 24;
 
   /// 이보다 크면 세게 당긴다(타일).
-  static const double _reconcileHardError = 2.5;
+  ///
+  /// 무시 구간([_reconcileDeadzone])보다 커야 의미가 있다. 그 사이가 "천천히
+  /// 좁히는" 구간이다.
+  static const double _reconcileHardError = 4.0;
 
   /// 초당 수렴 계수. 값이 클수록 빨리 붙는다.
   static const double _reconcileSoftRate = 2.0;
