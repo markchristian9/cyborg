@@ -17,5 +17,11 @@ PROVISIONING_PROFILE_SPECIFIER =
 // 공증의 전제 조건. 켜 두지 않으면 Apple 이 공증 자체를 거절한다.
 ENABLE_HARDENED_RUNTIME = YES
 
+// Xcode 는 시키지 않아도 com.apple.security.get-task-allow 를 앱에 끼워 넣는다.
+// 디버거를 붙일 수 있게 해 주는 권한이라 개발 중에는 필요하지만, 배포판에 남아
+// 있으면 Apple 이 공증을 거절한다("The executable requests the
+// com.apple.security.get-task-allow entitlement"). Release 에서는 끼워 넣지 못하게 막는다.
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
+
 // 공증에는 Apple 타임스탬프 서버가 찍어 준 시각이 함께 들어가야 한다.
 OTHER_CODE_SIGN_FLAGS = $(inherited) --timestamp

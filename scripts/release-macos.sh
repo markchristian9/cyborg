@@ -21,20 +21,15 @@
 # 서명만 하면 "확인되지 않은 개발자" 경고까지는 줄어들지만 여전히 한 번은 막힌다.
 # 공증까지 마쳐야 받는 사람이 두 번 클릭으로 그냥 실행할 수 있다.
 #
-# 공증 계정 등록 (맨 처음 한 번만)
-# ────────────────────────────────
-# 공증은 Apple 서버에 로그인해야 하므로 앱 암호가 필요하다.
+# 공증 계정 등록 (기계마다 맨 처음 한 번만)
+# ─────────────────────────────────────────
+# 공증은 Apple 서버에 로그인해야 한다. 이 저장소는 App Store Connect API 키를
+# env/ 에 두고 쓴다(env/ 는 .gitignore 에 있어 저장소에 올라가지 않는다).
 #
-#   1) https://account.apple.com → 로그인 및 보안 → 앱 암호 → 새로 만들기
-#      (Apple 계정 암호가 아니라 "앱 암호"다. xxxx-xxxx-xxxx-xxxx 꼴)
-#   2) 아래 명령으로 그 암호를 키체인에 넣어 둔다.
+#   ./scripts/release-macos.sh --setup
 #
-#      xcrun notarytool store-credentials actionrpg-notary \
-#        --apple-id "thruthesky@gmail.com" \
-#        --team-id "AX352BQR6K" \
-#        --password "발급받은-앱-암호"
-#
-# 한 번 넣어 두면 그 다음부터는 이 스크립트가 알아서 쓴다.
+# 이 명령이 env/ 에서 키를 찾아, 그대로 붙여 넣어 실행할 등록 명령을 찍어 준다.
+# 한 번 넣어 두면 그 다음부터는 스크립트가 키체인에서 알아서 꺼내 쓴다.
 
 set -euo pipefail
 
@@ -53,6 +48,17 @@ DO_NOTARIZE=1
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT/build/macos/Build/Products/Release"
 DIST_DIR="$ROOT/build/dist"
+
+# 공증 계정 등록에 쓸 App Store Connect API 키. 값을 여기 적어 두지 않고 env/ 에서
+# 찾아 읽는다 — env/ 는 저장소에 올라가지 않으므로 키 정보가 새어 나갈 일이 없다.
+API_KEY_FILE="$(ls "$ROOT"/env/AuthKey_*.p8 2>/dev/null | head -1)"
+if [[ -n "$API_KEY_FILE" ]]; then
+  API_KEY_ID="$(basename "$API_KEY_FILE" .p8 | sed 's/^AuthKey_//')"
+  API_ISSUER="$(grep -m1 -i 'Issuer ID:' "$ROOT/env/ios-app.txt" 2>/dev/null | sed 's/.*[Ii]ssuer ID: *//' | tr -d ' \r')"
+fi
+API_KEY_FILE="${API_KEY_FILE:-env/AuthKey_<키ID>.p8}"
+API_KEY_ID="${API_KEY_ID:-<키ID>}"
+API_ISSUER="${API_ISSUER:-<Issuer ID>}"
 
 usage() {
   cat <<'EOF'
@@ -75,23 +81,32 @@ EOF
 
 setup_guide() {
   cat <<EOF
-공증 계정 등록 (맨 처음 한 번만)
+공증 계정 등록 (기계마다 맨 처음 한 번만)
 
-  1) https://account.apple.com 에 로그인
-  2) [로그인 및 보안] → [앱 암호] → [앱 암호 생성]
-     이름은 아무거나 (예: notarytool). xxxx-xxxx-xxxx-xxxx 꼴의 암호가 나온다.
-  3) 아래 명령을 그대로 실행 (마지막 암호만 바꿔서)
+방법 1 — App Store Connect API 키 (이 저장소가 쓰는 방식)
+
+  env/ 에 키가 이미 있다면 이 한 줄이면 끝난다.
 
      xcrun notarytool store-credentials $KEYCHAIN_PROFILE \\
-       --apple-id "$APPLE_ID" \\
-       --team-id "$TEAM_ID" \\
-       --password "여기에-앱-암호"
+       --key $API_KEY_FILE \\
+       --key-id $API_KEY_ID \\
+       --issuer $API_ISSUER
 
-  4) 다시 ./scripts/release-macos.sh 실행
+  키가 없다면 App Store Connect 에 $APPLE_ID 로 로그인해서
+  [Users and Access] → [Integrations] → [Team Keys] 에서 발급받아
+  env/AuthKey_<키ID>.p8 로 저장한다. (env/ 는 저장소에 올라가지 않는다)
 
-주의: Apple Developer Program 에 가입돼 있어야 공증이 된다(연 \$99).
-      가입 없이 배포하려면 --skip-notarize 를 쓰되, 받는 사람이
-      [제어 클릭 → 열기] 를 한 번 해 줘야 실행된다.
+방법 2 — 앱 암호
+
+  1) https://account.apple.com → [로그인 및 보안] → [앱 암호] → 생성
+     (Apple 계정 암호가 아니다. xxxx-xxxx-xxxx-xxxx 꼴이다)
+  2) xcrun notarytool store-credentials $KEYCHAIN_PROFILE \\
+       --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "발급받은-앱-암호"
+
+등록했으면 다시 ./scripts/release-macos.sh 를 실행하면 된다.
+
+주의: Apple Developer Program 회원이라야 공증이 된다(연 \$99).
+      회원이 아니면 --skip-notarize 로 서명본만 만들 수 있다.
 EOF
 }
 
@@ -167,10 +182,20 @@ if ! grep -q "flags=.*runtime" <<<"$SIGN_INFO"; then
 fi
 echo "  Hardened Runtime: 켜짐"
 
+# Xcode 는 시키지 않아도 디버거 부착 권한(get-task-allow)을 끼워 넣곤 한다.
+# 그대로 올리면 Apple 이 5 분쯤 검사한 뒤 거절한다. 올리기 전에 여기서 잡는다.
+ENTS="$(codesign -d --entitlements - --xml "$APP" 2>/dev/null | plutil -p - 2>/dev/null || true)"
+if grep -q "get-task-allow" <<<"$ENTS"; then
+  die "앱에 디버거 부착 권한(get-task-allow)이 들어 있다. 이대로는 공증이 거절된다.
+   Release.xcconfig 의 CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO 를 확인하고
+   'flutter clean' 후 다시 빌드하라."
+fi
+echo "  디버그 권한 없음"
+
 say "번들 전체를 검사한다 (프레임워크·플러그인 포함)"
 codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | sed 's/^/  /'
 
-# ── 3. 배포 파일 만들기 ─────────────────────────────────────────────────
+# ── 3. 공증 준비 ────────────────────────────────────────────────────────
 
 VERSION="$(grep -m1 '^version:' "$ROOT/pubspec.yaml" | sed 's/version: *//' | tr -d ' \r')"
 VERSION="${VERSION%%+*}"
@@ -179,6 +204,56 @@ VERSION="${VERSION%%+*}"
 mkdir -p "$DIST_DIR"
 ARTIFACT="$DIST_DIR/$APP_NAME-$VERSION.$FORMAT"
 rm -f "$ARTIFACT"
+
+if [[ $DO_NOTARIZE -eq 1 ]] \
+   && ! xcrun notarytool history --keychain-profile "$KEYCHAIN_PROFILE" >/dev/null 2>&1; then
+  echo ""
+  echo "  '$KEYCHAIN_PROFILE' 이름으로 저장된 공증 계정이 없다."
+  echo ""
+  setup_guide
+  echo ""
+  echo "  지금 당장 배포해야 한다면 --skip-notarize 로 서명본만 만들 수 있다."
+  exit 1
+fi
+
+# 파일 하나를 Apple 에 올려 검사받는다. 거절당하면 이유를 찾는 법을 알려 주고 멈춘다.
+notarize() {
+  local target="$1"
+  xcrun notarytool submit "$target" \
+    --keychain-profile "$KEYCHAIN_PROFILE" \
+    --wait 2>&1 | tee "$DIST_DIR/notarize.log" | sed 's/^/  /'
+
+  grep -q "status: Accepted" "$DIST_DIR/notarize.log" && return 0
+
+  local sid
+  sid="$(grep -m1 '  id:' "$DIST_DIR/notarize.log" | awk '{print $2}')"
+  echo ""
+  echo "  거절 사유를 보려면:"
+  echo "    xcrun notarytool log $sid --keychain-profile $KEYCHAIN_PROFILE"
+  die "공증이 통과하지 못했다."
+}
+
+# ── 4. 앱에 통과 도장 박기 ──────────────────────────────────────────────
+#
+# 배포 파일(DMG)만 공증하면 도장이 DMG 껍데기에만 박힌다. 받는 사람이 앱을
+# 응용 프로그램 폴더로 끌어다 놓는 순간 도장은 따라가지 않고, 그때부터는
+# 열 때마다 Apple 서버에 물어봐야 한다. 앱 자체에 박아 두면 인터넷이
+# 끊겨 있어도 열린다. 그래서 앱을 먼저 공증한다.
+
+if [[ $DO_NOTARIZE -eq 1 ]]; then
+  say "앱을 공증한다 (보통 1~5분)"
+  APP_ZIP="$DIST_DIR/.notarize-app.zip"
+  rm -f "$APP_ZIP"
+  # 올릴 때는 ditto 로 싸야 한다. 일반 zip 은 심볼릭 링크를 뭉개 서명을 깨뜨린다.
+  ditto -c -k --sequesterRsrc --keepParent "$APP" "$APP_ZIP"
+  notarize "$APP_ZIP"
+  rm -f "$APP_ZIP"
+
+  say "앱에 통과 도장을 박는다 (staple)"
+  xcrun stapler staple "$APP" 2>&1 | sed 's/^/  /'
+fi
+
+# ── 5. 배포 파일 만들기 ─────────────────────────────────────────────────
 
 if [[ "$FORMAT" == "dmg" ]]; then
   say "DMG 를 만든다: $(basename "$ARTIFACT")"
@@ -206,7 +281,7 @@ else
   ditto -c -k --sequesterRsrc --keepParent "$APP" "$ARTIFACT"
 fi
 
-# ── 4. 공증 ─────────────────────────────────────────────────────────────
+# ── 6. 배포 파일에도 도장 박기 ──────────────────────────────────────────
 
 if [[ $DO_NOTARIZE -eq 0 ]]; then
   say "공증을 건너뛴다 (--skip-notarize)"
@@ -215,53 +290,28 @@ if [[ $DO_NOTARIZE -eq 0 ]]; then
   서명은 됐지만 공증을 받지 않았다. 받는 사람이 처음 실행할 때
   "확인되지 않은 개발자" 경고가 뜬다. 이렇게 알려 줘라.
 
-    Finder 에서 앱을 [제어 클릭(우클릭)] → [열기] → [열기]
+    앱 실행 → 차단 메시지에서 [완료]
+    → 시스템 설정 → 개인정보 보호 및 보안 → 맨 아래 [그래도 열기]
+    → 다시 실행 → [열기]
+
+  (macOS 15 Sequoia 부터는 예전의 "우클릭 → 열기" 우회가 막혔다.)
 
   완성품: $ARTIFACT
 EOF
   exit 0
 fi
 
-if ! xcrun notarytool history --keychain-profile "$KEYCHAIN_PROFILE" >/dev/null 2>&1; then
-  echo ""
-  echo "  '$KEYCHAIN_PROFILE' 이름으로 저장된 공증 계정이 없다."
-  echo ""
-  setup_guide
-  echo ""
-  echo "  지금 당장 배포해야 한다면 --skip-notarize 로 서명본만 만들 수 있다."
-  echo "  이미 만들어진 서명본: $ARTIFACT"
-  exit 1
+if [[ "$FORMAT" == "dmg" ]]; then
+  # 앱에는 이미 도장이 박혀 있다. DMG 껍데기에도 박아야 마운트할 때 조용하다.
+  say "DMG 를 공증한다 (보통 1~5분)"
+  notarize "$ARTIFACT"
+
+  say "DMG 에 통과 도장을 박는다 (staple)"
+  xcrun stapler staple "$ARTIFACT" 2>&1 | sed 's/^/  /'
 fi
+# ZIP 껍데기에는 도장을 박을 수 없다. 안의 앱에 이미 박혀 있으니 그걸로 족하다.
 
-say "Apple 에 공증을 맡긴다 (보통 1~5분, 처음엔 더 걸릴 수 있다)"
-xcrun notarytool submit "$ARTIFACT" \
-  --keychain-profile "$KEYCHAIN_PROFILE" \
-  --wait 2>&1 | tee "$DIST_DIR/notarize.log" | sed 's/^/  /'
-
-if ! grep -q "status: Accepted" "$DIST_DIR/notarize.log"; then
-  SUBMISSION_ID="$(grep -m1 '  id:' "$DIST_DIR/notarize.log" | awk '{print $2}')"
-  echo ""
-  echo "  거절 사유를 보려면:"
-  echo "    xcrun notarytool log $SUBMISSION_ID --keychain-profile $KEYCHAIN_PROFILE"
-  die "공증이 통과하지 못했다."
-fi
-
-# ── 5. 통과 도장 박아 넣기 ──────────────────────────────────────────────
-#
-# staple 을 해 두면 받는 사람이 인터넷에 연결돼 있지 않아도 검사를 통과한다.
-
-say "공증 결과를 파일에 박아 넣는다 (staple)"
-xcrun stapler staple "$ARTIFACT" 2>&1 | sed 's/^/  /'
-
-if [[ "$FORMAT" == "zip" ]]; then
-  # ZIP 자체에는 도장을 박을 수 없다. 앱에 박고 다시 묶는다.
-  say "ZIP 은 앱에 직접 도장을 박고 다시 묶는다"
-  xcrun stapler staple "$APP" 2>&1 | sed 's/^/  /'
-  rm -f "$ARTIFACT"
-  ditto -c -k --sequesterRsrc --keepParent "$APP" "$ARTIFACT"
-fi
-
-# ── 6. 받는 사람 입장에서 최종 확인 ─────────────────────────────────────
+# ── 7. 받는 사람 입장에서 최종 확인 ─────────────────────────────────────
 
 say "받는 사람의 Mac 이 보게 될 것을 그대로 확인한다"
 if spctl --assess --type execute --verbose=4 "$APP" 2>&1 | sed 's/^/  /' | grep -q "accepted"; then
@@ -271,7 +321,8 @@ else
   die "Gatekeeper 검사를 통과하지 못했다."
 fi
 
-xcrun stapler validate "$ARTIFACT" 2>&1 | sed 's/^/  /'
+say "앱에 도장이 박혀 있는지 확인한다 (인터넷 없이도 열리는가)"
+xcrun stapler validate "$APP" 2>&1 | sed 's/^/  /'
 
 # ── 끝 ──────────────────────────────────────────────────────────────────
 
