@@ -124,7 +124,10 @@ class _SfxSpec {
   /// 같은 사운드의 최소 재생 간격. 짧은 시간에 몰려 찢어지는 것을 막는다.
   final int throttleMs;
 
-  /// 동시에 겹쳐 재생할 수 있는 최대 개수.
+  /// 동시에 겹쳐 울릴 수 있는 최대 개수.
+  ///
+  /// 이 수를 넘기면 가장 오래된 소리를 끊고 새 소리를 낸다. 1 이면 같은
+  /// 사운드가 절대 겹치지 않고 항상 마지막 것 하나만 울린다.
   final int maxPlayers;
 
   /// 반복 재생 시 기계적으로 들리지 않도록 볼륨을 흔드는 폭(0~1).
@@ -219,10 +222,14 @@ class GameAudio {
       maxPlayers: 4,
     ),
     // ── 이동 ─────────────────────────────────────────────────────
+    // 대시는 재사용 대기가 끝나는 대로 다시 눌린다. 앞선 스러스터가 아직
+    // 타고 있는데 새 점화가 겹치면 소리만 두꺼워지므로, 언제나 마지막 한
+    // 번만 울리게 한다.
     Sfx.dash: _SfxSpec(
       ['dash_0', 'dash_1'],
       volume: 0.55,
       throttleMs: 80,
+      maxPlayers: 1,
     ),
     Sfx.step: _SfxSpec(
       ['step_0', 'step_1', 'step_2', 'step_3'],
@@ -327,6 +334,13 @@ class GameAudio {
   static final Stopwatch _clock = Stopwatch()..start();
   static final Map<String, AudioPool> _pools = {};
   static final Map<Sfx, int> _lastPlayedMs = {};
+
+  /// 사운드별로 지금 울리고 있는 목소리들. 먼저 시작한 것이 앞에 온다.
+  ///
+  /// 목록의 길이는 그 사운드의 `maxPlayers` 를 넘지 않는다. 재생이 저절로
+  /// 끝난 목소리도 자리에 남지만, 이미 끝난 것을 다시 끊는 일은 아무 일도
+  /// 하지 않으므로 셈이 어긋나도 소리가 사라지지는 않는다.
+  static final Map<Sfx, List<Future<StopFunction>>> _voices = {};
 
   static bool _ready = false;
   static MusicTrack? _currentTrack;
@@ -519,8 +533,31 @@ class GameAudio {
     final pool = _pools['${spec.music ? _musicDir : _sfxDir}$name.wav'];
     if (pool == null) return;
 
-    // 게임 루프를 막지 않도록 완료를 기다리지 않는다.
-    unawaited(_guard(pool.start(volume: volume)));
+    _startVoice(sfx, pool, volume, spec.maxPlayers);
+  }
+
+  /// 소리 하나를 울리되, 같은 사운드가 겹치는 수를 [limit] 안에 묶는다.
+  ///
+  /// [AudioPool] 의 `maxPlayers` 는 동시 재생 수를 막지 않는다. 여유
+  /// 플레이어가 없으면 새 플레이어를 그때그때 만들어 내고, 그 수는 자리로만
+  /// 제한된다 — 재생이 끝난 뒤 몇 개를 남겨 둘지를 정할 뿐이다. 그래서 소리
+  /// 길이보다 짧은 간격으로 다시 눌리는 사운드는 누를수록 목소리가 쌓이고,
+  /// 진폭이 더해져 점점 커진다. 새 목소리를 내기 전에 가장 오래된 목소리를
+  /// 직접 끊어 그 누적을 끊는다.
+  static void _startVoice(Sfx sfx, AudioPool pool, double volume, int limit) {
+    final voices = _voices.putIfAbsent(sfx, () => <Future<StopFunction>>[]);
+    while (voices.length >= limit) {
+      final oldest = voices.removeAt(0);
+      unawaited(oldest.then((stop) => _guard(stop())));
+    }
+    // 게임 루프를 막지 않도록 완료를 기다리지 않는다. 재생에 실패해도 자리는
+    // 채워 두어야 뒤따르는 소리가 끊을 대상을 찾을 수 있다.
+    voices.add(
+      pool.start(volume: volume).catchError((Object error) {
+        debugPrint('GameAudio: 재생 중 오류 — $error');
+        return () async {};
+      }),
+    );
   }
 
   /// 배경음악을 무한 반복으로 재생한다.
