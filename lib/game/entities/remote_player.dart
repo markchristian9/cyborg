@@ -132,10 +132,19 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
   /// 한 번도 공격한 적이 없다" 를 구별할 수 있다.
   int _playedAttackAt;
 
-  /// 남은 공격 동작 시간(초). 0 보다 크면 휘두르는 중이다.
+  /// 남은 공격 동작 시간(초). 무엇으로 쳤든 공격 한 번마다 채워진다.
+  ///
+  /// 이 값만으로는 칼을 그릴지 정할 수 없다. 무엇으로 쳤는지는 [_swingSkill]
+  /// 가 쥐고 있고, 둘을 함께 본 것이 [isSwinging] 이다.
   double _swingTimer = 0;
 
-  /// 이번 공격이 무엇이었는지. 스킬마다 다르게 그린다.
+  /// 이번 공격이 무엇이었는지. **스킬마다 다르게 그린다.**
+  ///
+  /// 한때 이 값을 적어 두고 아무도 읽지 않았다. 그래서 무엇으로 쳤든 칼을
+  /// 휘두르는 동작이 나갔고, 플라즈마는 탄과 칼자국이 **함께** 그려졌다 —
+  /// 쏜 본인 화면에는 탄만 있는데 남의 화면에는 칼이 있는, 두 화면이 갈라진
+  /// 상태다([Player.render] 는 `state == PlayerState.melee` 일 때만 칼을 그리고
+  /// `tryShoot` 은 그 상태를 만들지 않는다).
   int _swingSkill = AttackSkill.none;
 
   /// 공격 동작 한 번의 길이(초).
@@ -144,8 +153,11 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
   /// 끊기지 않고 이어져, 언제 한 대가 들어갔는지 눈으로 셀 수 없다.
   static const double _swingDuration = 0.26;
 
-  /// 지금 휘두르는 중인지. 무기를 꺼내 보일지 정한다.
-  bool get isSwinging => _swingTimer > 0;
+  /// 지금 **칼을 휘두르는 중**인지.
+  ///
+  /// 원거리 스킬은 여기에 해당하지 않는다. 플라즈마는 탄이 날아가는 것으로
+  /// 이미 다 보이고, 거기에 칼자국까지 겹치면 쏜 사람 화면과 달라진다.
+  bool get isSwinging => _swingTimer > 0 && _swingSkill == AttackSkill.none;
 
   /// 서버 외형 문자열을 신체 프레임으로 옮긴다.
   ///
@@ -303,6 +315,12 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
   /// 때문에 이미 판정이 끝난 뒤에 날아가므로, 대상이 먼저 쓰러지고 탄이 그
   /// 자리를 지나가는 순간이 있을 수 있다 — 판정을 늦추는 것보다 낫다.
   void _spawnRemoteBolt(Vector2 direction) {
+    // 아직 월드에 붙지 않은 몸은 연출을 낼 곳이 없다. [Enemy._die] 가 같은
+    // 이유로 같은 빗장을 건다 — 만들어 놓고 아직 마운트되지 않은 한두 프레임
+    // 사이에 스냅샷이 들어오면 `game` 이 트리를 찾지 못해 그 자리에서 죽는다.
+    // 붙지 않은 몸은 그려지지도 않으므로 탄을 건너뛰어도 잃는 것이 없다.
+    if (!isMounted) return;
+
     game.spawnProjectile(
       Projectile(
         grid: grid + direction * 0.4,

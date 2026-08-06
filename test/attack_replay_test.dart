@@ -90,6 +90,40 @@ void main() {
         reason: '같은 공격이 매 프레임 다시 재생되어 동작이 끝나지 않는다',
       );
     });
+
+    // 무엇으로 쳤는지가 남의 화면에도 그대로 보여야 한다. 서버는 `attack_skill`
+    // 로 그것을 알려 주는데, 한때 클라이언트가 그 값을 적어 두기만 하고 읽지
+    // 않아 **모든 공격이 칼질로 그려졌다.** 플라즈마는 탄과 칼자국이 함께
+    // 나가고, 정작 쏜 본인 화면에는 탄만 있다 — 두 화면이 갈라진 상태다.
+    test('플라즈마는 남의 화면에서 칼질로 그려지지 않는다', () {
+      final entity = RemotePlayerEntity(snapshot: snapshot(attackAt: 1000));
+
+      entity.applySnapshot(
+        snapshot(attackAt: 2000, skill: AttackSkill.plasma),
+      );
+      expect(
+        entity.isSwinging,
+        isFalse,
+        reason: '원거리 스킬에 칼자국이 겹치면 쏜 사람 화면과 달라진다',
+      );
+    });
+
+    test('플라즈마 다음의 평타는 다시 칼질로 그려진다', () {
+      final entity = RemotePlayerEntity(snapshot: snapshot(attackAt: 1000));
+      entity.applySnapshot(
+        snapshot(attackAt: 2000, skill: AttackSkill.plasma),
+      );
+      for (var i = 0; i < 30; i++) {
+        entity.update(1 / 60);
+      }
+
+      entity.applySnapshot(snapshot(attackAt: 3000));
+      expect(
+        entity.isSwinging,
+        isTrue,
+        reason: '스킬을 한 번 쓴 뒤로 칼이 영영 사라지면 안 된다',
+      );
+    });
   });
 
   group('몬스터의 타격', () {

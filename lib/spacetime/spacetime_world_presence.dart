@@ -58,24 +58,26 @@ class SpacetimeWorldPresence extends WorldPresence {
   /// 지금 보내야 할 간격. **주변 인원이 정한다.**
   ///
   /// 🛑 **거리로 차등할 수 없어서 혼잡도로 차등한다.** 구독은 행 단위라 한 번
-  /// 쓰면 그 행을 구독한 전원에게 같은 델타가 간다 — "가까운 사람에게는 24 Hz,
-  /// 먼 사람에게는 8 Hz" 를 보내는 길이 없다. 보내는 쪽이 고를 수 있는 것은
+  /// 쓰면 그 행을 구독한 전원에게 같은 델타가 간다 — "가까운 사람에게는 10 Hz,
+  /// 먼 사람에게는 4 Hz" 를 보내는 길이 없다. 보내는 쪽이 고를 수 있는 것은
   /// **자기 좌표를 얼마나 자주 쓸 것인가** 하나뿐이다.
   ///
   /// 그래서 기준을 뒤집는다. 받는 사람과의 거리가 아니라 **내 갱신이 몇 명에게
   /// 퍼지는가**를 본다. 서로를 구독하는 N 명이 만드는 델타는 N² 에 비례하므로,
   /// 인원에 반비례해 빈도를 낮추면 총량이 N 에 비례하는 선까지 눌린다.
   ///
+  /// 행/초는 `N × 주파수 × N` 이다 — N 명이 저마다 쓰고, 그 한 줄이 N 명에게 간다.
+  ///
   /// ```text
-  ///   8 명 → 24 Hz     1,536 행/초
-  ///  16 명 → 12 Hz     3,072 행/초
-  ///  24 명 →  8 Hz     4,608 행/초
-  ///  50 명 →  8 Hz    20,000 행/초  (하한에 걸린다)
+  ///   8 명 → 10 Hz       640 행/초
+  ///  16 명 →  5 Hz     1,280 행/초
+  ///  24 명 →  4 Hz     2,304 행/초  (하한에 걸린다)
+  ///  50 명 →  4 Hz    10,000 행/초  (하한에 걸린다)
   /// ```
   ///
-  /// 하한이 있어 50 명에서도 완전한 N 비례는 되지 않지만, 고정 24 Hz 의 6 만
-  /// 행에서 3 분의 1 로 준다. 사람이 몰릴수록 서로가 화면 구석의 작은 점이 되므로
-  /// 잃는 것은 크지 않다.
+  /// 하한이 있어 50 명에서도 완전한 N 비례는 되지 않지만, 고정 10 Hz 의
+  /// 25,000 행에서 5 분의 2 로 준다. 사람이 몰릴수록 서로가 화면 구석의 작은
+  /// 점이 되므로 잃는 것은 크지 않다.
   Duration get _interval {
     final crowd = _rows.value.length;
     if (crowd <= _calmCrowd) return _fastInterval;
@@ -141,13 +143,15 @@ class SpacetimeWorldPresence extends WorldPresence {
   ValueListenable<List<Loot>> get _lootRows => _client.loot.rows;
 
   /// 지금 조종 중인 캐릭터 번호. 몹의 선점자가 나인지 가릴 때 쓴다.
-  int? get _myCharacterId {
-    final me = _client.identity;
-    for (final row in _rows.value) {
-      if (row.identity == me) return row.characterId.toInt();
-    }
-    return null;
-  }
+  ///
+  /// **[_myRow] 를 거친다.** 청크 구독만 훑으면, 서버가 나를 옮기는 순간(사망
+  /// 재가동·텔레포트) 내 행이 옛 구독 밖으로 나가 이 값이 잠깐 `null` 이 된다.
+  /// 그 사이 [loots] 는 내 몫으로 잡아 둔 전리품까지 `reservedForOther` 로
+  /// 읽어 — `reservedFor != null && reservedFor != null` 이 참이 된다 — 방금
+  /// 내가 잡은 몹의 전리품을 주울 수 없는 것으로 표시하고, [monsters] 는 내가
+  /// 선점한 몹을 모두 남의 것으로 표시한다. 구독이 새 자리로 옮겨 갈 때까지
+  /// 한 왕복이 걸리므로 눈에 띄는 길이다.
+  int? get _myCharacterId => _myRow?.characterId.toInt();
 
   @override
   bool get isAvailable => _entered;

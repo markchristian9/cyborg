@@ -149,4 +149,80 @@ void main() {
       reason: '몸이 붙었지만 화면 좌표가 갱신되지 않았다',
     );
   });
+
+  /// 멀어진 몹이 **반드시** 걷히는지 본다.
+  ///
+  /// 걷어내기는 "본 것과 들고 있는 것의 개수가 같으면 건너뛴다" 는 지름길로
+  /// 시작한다. 그 지름길은 본 것이 들고 있는 것의 부분집합일 때만 옳은데,
+  /// 한때 쓰러진 몹과 정원을 넘어선 몹까지 **몸을 만들지 않고도** 본 것에
+  /// 넣었다. 그러면 크기만 같고 내용이 다른 두 집합이 만들어져, 멀어진 몹이
+  /// 걷히지 않은 채 남는다 — 갱신도 더 받지 못하므로 화면에는 그 자리에
+  /// **얼어붙은 몹**으로 보인다.
+  ///
+  /// 개수를 일부러 맞춰 그 상황을 만든다. 들고 있는 것 하나가 멀어지는 동시에
+  /// 쓰러진 몹 하나가 사거리 안으로 들어온다.
+  test('쓰러진 몹이 시야에 들어와도 멀어진 몹은 걷힌다', () async {
+    final game = await gameWithServerMonsters(0);
+    final presence = game.presence as _FakePresence;
+    final origin = game.player.grid;
+
+    // 곁에 살아 있는 몹 하나. 이것이 몸을 얻는다.
+    presence._monsters.add(
+      ServerMonster(
+        id: 1,
+        level: 1,
+        grid: origin + Vector2(4, 0),
+        hp: 100,
+        maxHp: 100,
+        alive: true,
+        taggedByMe: false,
+      ),
+    );
+    for (var i = 0; i < 30; i++) {
+      game.update(1 / 60);
+    }
+    expect(
+      game.world.children.whereType<Enemy>().length,
+      1,
+      reason: '곁의 몹이 몸을 얻지 못했다 — 이 시험의 전제가 무너졌다',
+    );
+
+    // 그 몹은 걷어낼 거리(34 타일) 밖으로 나가고, 대신 **쓰러진** 몹 하나가
+    // 사거리 안으로 들어온다. 몸을 만들지 않는 쪽이라 개수는 1 대 1 로 같다.
+    presence._monsters
+      ..clear()
+      ..add(
+        ServerMonster(
+          id: 1,
+          level: 1,
+          grid: origin + Vector2(200, 0),
+          hp: 100,
+          maxHp: 100,
+          alive: true,
+          taggedByMe: false,
+        ),
+      )
+      ..add(
+        ServerMonster(
+          id: 2,
+          level: 1,
+          grid: origin + Vector2(5, 0),
+          hp: 0,
+          maxHp: 100,
+          alive: false,
+          taggedByMe: false,
+        ),
+      );
+
+    for (var i = 0; i < 60; i++) {
+      game.update(1 / 60);
+    }
+
+    expect(
+      game.world.children.whereType<Enemy>(),
+      isEmpty,
+      reason: '멀어진 몹이 걷히지 않고 얼어붙은 채 남았다',
+    );
+    expect(game.enemies, isEmpty, reason: '전투 대상 목록에도 남아 있다');
+  });
 }

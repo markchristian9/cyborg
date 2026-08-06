@@ -23,6 +23,25 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
   /// 레이더가 보여 주는 반경(미터). 월드가 1 km²라 전체가 아니라 주변만 본다.
   static const double _radarRangeTiles = 70;
 
+  // ── 상단 패널의 자리 ────────────────────────────────────────────────
+  //
+  // 세 패널(생존 정보·월드 배너·미니맵)이 같은 띠를 나눠 쓰므로 자리를 한곳에
+  // 모아 둔다. 각자 자기 자리를 따로 계산하면 **좁은 화면에서 겹치는 것을
+  // 아무도 알아채지 못한다** — 오류가 나지 않고 그저 나중에 그린 패널이 앞의
+  // 것을 덮어, 체력 숫자가 잘린 채로 남는다.
+
+  /// 좌상단 생존 정보 패널의 바깥 사각형(왼쪽·위·너비·높이).
+  static const double _vitalsLeft = 10;
+  static const double _vitalsTop = 10;
+  static const double _vitalsWidth = 268;
+  static const double _vitalsHeight = 112;
+
+  /// 패널 사이에 두는 최소 간격.
+  static const double _panelGap = 8;
+
+  /// 미니맵 바깥 여백. 오른쪽 끝에서 이만큼 띄운다.
+  static const double _minimapMargin = 18;
+
   final TextPaint _label = TextPaint(
     style: const TextStyle(
       color: GamePalette.textDim,
@@ -97,12 +116,11 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
 
   void _renderVitals(Canvas canvas) {
     final player = game.player;
-    const left = 18.0;
-    const top = 18.0;
-    const panelWidth = 268.0;
+    const left = _vitalsLeft + 8;
+    const top = _vitalsTop + 8;
 
     final panel = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(left - 8, top - 8, panelWidth, 112),
+      vitalsRect,
       const Radius.circular(10),
     );
     canvas.drawRRect(panel, Paint()..color = GamePalette.hudBackground);
@@ -326,14 +344,10 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
   /// 웨이브 번호가 있던 자리다. 판 구분도 초기화도 없는 하나의 월드에는
   /// "몇 번째" 라고 할 진행도가 없으므로, 그 대신 위치와 동료 수를 알린다.
   void _renderWorldBanner(Canvas canvas) {
-    final centerX = size.x / 2;
+    final rect = worldBannerRect;
+    final centerX = rect.center.dx;
     final zone = TeleportDestination.at(game.player.grid, game.map);
 
-    final rect = Rect.fromCenter(
-      center: Offset(centerX, 32),
-      width: 236,
-      height: 46,
-    );
     canvas.drawRRect(
       RRect.fromRectAndRadius(rect, const Radius.circular(10)),
       Paint()..color = GamePalette.hudBackground,
@@ -350,17 +364,77 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
             : GamePalette.hudBorder.withValues(alpha: 0.35),
     );
 
+    // 글씨는 **상자를 따라간다.** 화면 위쪽에 고정해 두면 좁은 창에서 상자만
+    // 한 줄 아래로 내려가고 글씨는 제자리에 남는다.
     _headline.render(
       canvas,
       zone.label,
-      Vector2(centerX, 20),
+      Vector2(centerX, rect.top + 11),
       anchor: Anchor.topCenter,
     );
     _label.render(
       canvas,
       _presenceText(),
-      Vector2(centerX, 40),
+      Vector2(centerX, rect.top + 31),
       anchor: Anchor.topCenter,
+    );
+  }
+
+  /// 좌상단 생존 정보 패널이 차지하는 자리.
+  @visibleForTesting
+  Rect get vitalsRect => const Rect.fromLTWH(
+        _vitalsLeft,
+        _vitalsTop,
+        _vitalsWidth,
+        _vitalsHeight,
+      );
+
+  /// 우상단 미니맵이 차지하는 자리.
+  @visibleForTesting
+  Rect get minimapRect => Rect.fromLTWH(
+        size.x - _minimapSize - _minimapMargin,
+        18,
+        _minimapSize,
+        _minimapSize,
+      );
+
+  /// 상단 중앙 배너가 차지하는 자리. **화면 한복판이 늘 비어 있는 것은 아니다.**
+  ///
+  /// 좌상단 생존 정보와 우상단 미니맵이 같은 띠를 쓰므로, 창이 좁으면 화면
+  /// 중앙에 둔 배너가 그 둘과 겹친다. 배너는 셋 중 마지막에 그려져 앞의 것을
+  /// 덮으므로, 겹치는 순간 **체력·마력 숫자가 잘린 채로 남는다** — 오류가 나지
+  /// 않아 눈으로 보기 전까지 드러나지 않는다. 720 픽셀 창에서 실제로 그랬다.
+  ///
+  /// 그래서 **들어갈 자리가 있으면 화면 중앙**을 그대로 쓰고, 없을 때만 빈
+  /// 구간 안으로 밀어 넣는다. 넓은 화면에서는 아무것도 달라지지 않는다.
+  ///
+  /// 사이가 배너보다 좁으면 **한 줄 아래로 내린다.** 세로로 좁히거나 글씨를
+  /// 줄이는 길도 있지만, 이 배너는 지금 어디에 있는지를 알리는 줄이라 읽히지
+  /// 않으면 있으나 마나다. 한 줄 아래는 어느 너비에서든 비어 있다.
+  @visibleForTesting
+  Rect get worldBannerRect {
+    const width = 236.0;
+    const height = 46.0;
+    const half = width / 2;
+
+    final minCenter = vitalsRect.right + _panelGap + half;
+    final maxCenter = minimapRect.left - _panelGap - half;
+    if (maxCenter >= minCenter) {
+      return Rect.fromCenter(
+        center: Offset((size.x / 2).clamp(minCenter, maxCenter), 32),
+        width: width,
+        height: height,
+      );
+    }
+
+    // 🛑 **둘 다의 아래**여야 한다. 생존 정보만 피하면 세로로 더 긴 미니맵과
+    // 겹친다 — 좁은 화면일수록 미니맵이 화면 중앙 쪽으로 다가오므로 그 실수가
+    // 정확히 여기서 드러난다.
+    final top = math.max(vitalsRect.bottom, minimapRect.bottom) + _panelGap;
+    return Rect.fromCenter(
+      center: Offset(size.x / 2, top + height / 2),
+      width: width,
+      height: height,
     );
   }
 
@@ -384,7 +458,7 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
   void _renderMinimap(Canvas canvas) {
     final map = game.map;
     final player = game.player;
-    final origin = Offset(size.x - _minimapSize - 18, 18);
+    final origin = minimapRect.topLeft;
     final center = Offset(_minimapSize / 2, _minimapSize / 2);
 
     // 레이더 한 픽셀이 담는 거리(미터).

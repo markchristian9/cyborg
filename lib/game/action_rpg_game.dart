@@ -1481,10 +1481,16 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     for (final snapshot in byPriority) {
       // 멀리 있는 것은 아직 그리지 않는다.
       if ((snapshot.grid - player.grid).length2 > visible) continue;
-      seen.add(snapshot.id);
 
       final existing = _activeMonsters[snapshot.id];
       if (existing != null) {
+        // 🛑 **몸을 실제로 들고 있는 것만 셈에 넣는다.** 아래 두 `continue`
+        // (죽어 있음·정원 초과)는 몸을 만들지 않고 지나가므로, 여기 위에서
+        // 미리 담으면 `seen` 에는 있는데 `_activeMonsters` 에는 없는 번호가
+        // 생긴다. 그러면 아래 지름길(`length == length`)이 크기만 같고 내용이
+        // 다른 두 집합을 같다고 읽어, 멀어진 몹이 걷히지 않은 채 남는다 —
+        // 갱신도 더 받지 못하므로 화면에는 **얼어붙은 몹**으로 보인다.
+        seen.add(snapshot.id);
         existing.applyServerState(
           grid: snapshot.grid,
           hpRatio: snapshot.hpRatio,
@@ -1513,11 +1519,16 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         lastAttackAtMicros: snapshot.lastAttackAtMicros,
       );
       _activeMonsters[snapshot.id] = enemy;
+      seen.add(snapshot.id);
       enemies.add(enemy);
       world.add(enemy);
     }
 
     // 멀어졌거나 서버에서 사라진 몹의 몸을 걷어낸다.
+    //
+    // 크기만 견주는 지름길이 성립하는 것은 **`seen` 이 `_activeMonsters` 의
+    // 부분집합이기 때문**이다(위 루프는 몸을 실제로 들고 있는 번호만 담는다).
+    // 그 전제가 깨지면 이 줄은 서로 다른 두 집합을 같다고 읽는다.
     if (_activeMonsters.length == seen.length) return;
     final stale = <int>[];
     _activeMonsters.forEach((id, enemy) {
