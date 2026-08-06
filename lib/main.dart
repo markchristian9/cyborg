@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'auth/cyborg_gate.dart';
 import 'auth/cyborg_kind.dart';
 import 'auth/cyborg_session.dart';
+import 'dev/dev_frame_stats.dart';
 import 'dev/dev_login.dart';
 import 'game/action_rpg_game.dart';
 import 'game/net/spacetime_game_sync.dart';
@@ -15,6 +16,8 @@ import 'spacetime/spacetime_world_presence.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // `CYBORG_FRAME_STATS` 를 준 실행에서만 켜진다. 평소에는 아무 일도 하지 않는다.
+  startFrameStats();
   runApp(const CyborgApp());
 }
 

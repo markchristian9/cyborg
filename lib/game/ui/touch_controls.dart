@@ -61,46 +61,104 @@ class ActionButton extends PositionComponent
   @override
   void onTapDown(TapDownEvent event) {
     event.handled = true;
-    _trigger();
+    _tapPointer = event.pointerId;
+    _begin();
   }
 
   @override
   void onTapUp(TapUpEvent event) {
-    _held = false;
+    if (_tapPointer != event.pointerId) return;
+    _tapPointer = null;
+    _endIfNobodyHolds();
   }
 
   @override
   void onTapCancel(TapCancelEvent event) {
-    _held = false;
+    if (_tapPointer != event.pointerId) return;
+    _tapPointer = null;
+    // 탭이 물러나는 자리는 두 가지를 함께 뜻한다 — "버튼 밖에서 손을 뗐다" 와
+    // "손가락이 밀려 드래그가 아레나를 이겼다" 다. 뒤엣것이면 **바로 다음 줄에**
+    // [onDragStart] 가 이어진다. 그 인계를 새 누름으로 세지 않도록 표시만 남긴다.
+    _tapHandingOver = true;
+    _endIfNobodyHolds();
   }
 
   @override
   void onDragStart(DragStartEvent event) {
+    super.onDragStart(event);
     event.handled = true;
-    _trigger();
+    _dragPointer = event.pointerId;
+
+    // 방금 물러난 탭에서 넘겨받은 것이라면 이미 센 누름이다. 쥔 상태만
+    // 되살리고 발동하지 않는다.
+    if (_tapHandingOver) {
+      _held = true;
+      return;
+    }
+    // 조이스틱을 쥔 손이 버튼 위로 미끄러져 들어온 경우다. 이건 새 누름이다.
+    _begin();
   }
 
   @override
   void onDragEnd(DragEndEvent event) {
-    _held = false;
+    super.onDragEnd(event);
+    if (_dragPointer != event.pointerId) return;
+    _dragPointer = null;
+    _endIfNobodyHolds();
   }
 
-  void _trigger() {
+  /// 지금 이 버튼을 쥐고 있는 탭·드래그의 번호. 아무도 쥐지 않았으면 null.
+  ///
+  /// 🛑 **둘을 따로 들고 있어야 한다.** [ActionButton] 은 `TapCallbacks` 와
+  /// `DragCallbacks` 를 함께 쓰는데, 두 갈래는 **서로 다른 번호 체계**를 쓴다 —
+  /// 탭 번호는 Flutter 의 포인터 번호이고, 드래그 번호는 Flame 안의 전역
+  /// 카운터(`FlameDragAdapter._globalIdCounter`)다. 그래서 번호가 같다고 같은
+  /// 손가락이 아니고, 다르다고 다른 손가락도 아니다. 한 칸에 섞어 담으면
+  /// 우연히 겹친 두 번호가 서로를 지운다.
+  int? _tapPointer;
+  int? _dragPointer;
+
+  /// 탭이 방금 물러났고 드래그가 이어받을 수 있는 상태인가.
+  ///
+  /// 인계는 **한 묶음의 이벤트 안에서** 일어난다(취소 바로 다음이 시작이다).
+  /// 그래서 [update] 가 한 번 돌면 지운다 — 그 뒤에 오는 드래그는 인계가 아니라
+  /// 정말로 새로 시작한 것이다.
+  bool _tapHandingOver = false;
+
+  void _begin() {
     _held = true;
+    // 첫 연타는 **한 박자 뒤**다. 0 으로 두면 누른 바로 다음 프레임에
+    // `_repeatTimer <= 0` 이 성립해 버려, 가만히 톡 눌러도 두 번 나갔다.
+    _repeatTimer = _repeatDelay;
     _pressAnim = 1;
     if (_enabled) onPressed();
   }
+
+  void _endIfNobodyHolds() {
+    if (_tapPointer == null && _dragPointer == null) _held = false;
+  }
+
+  /// 누르고 있을 때 연타가 시작되기까지의 시간(초).
+  ///
+  /// 한 번 톡 누른 것과 눌러 두는 것을 가르는 값이다. 짧으면 탭 하나가 연타로
+  /// 새고, 길면 눌러도 이어지지 않는 것처럼 느껴진다.
+  static const double _repeatDelay = 0.3;
+
+  /// 연타 간격(초).
+  static const double _repeatInterval = 0.12;
 
   double _repeatTimer = 0;
 
   @override
   void update(double dt) {
+    // 인계 창은 한 프레임짜리다. 이 뒤에 오는 드래그는 새 누름이다.
+    _tapHandingOver = false;
     if (_pressAnim > 0) _pressAnim = math.max(0, _pressAnim - dt * 5);
     // 길게 누르면 연속 발동한다.
     if (_held) {
       _repeatTimer -= dt;
       if (_repeatTimer <= 0) {
-        _repeatTimer = 0.12;
+        _repeatTimer = _repeatInterval;
         if (_enabled) onPressed();
       }
     } else {

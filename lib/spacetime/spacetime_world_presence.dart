@@ -421,11 +421,47 @@ class SpacetimeWorldPresence extends WorldPresence {
         .ignore();
   }
 
+  /// [monsters] 가 마지막으로 옮겨 담은 행 목록. 캐시가 아직 쓸 만한지 가리는 열쇠다.
+  List<Monster>? _monstersSource;
+
+  /// 그렇게 옮겨 담은 결과. [_monstersSource] 가 그대로면 이것을 그대로 준다.
+  List<ServerMonster>? _monstersCache;
+
+  /// 캐시를 만들 때의 내 캐릭터 번호. `taggedByMe` 가 여기에 걸려 있다.
+  int? _monstersCharacterId;
+
+  /// 지금 구독하고 있는 몹들.
+  ///
+  /// 🛑 **돌려주는 목록을 고쳐 쓰지 말 것.** [others] 와 같은 이유다 — 호출한
+  /// 쪽마다 같은 목록을 나눠 쓴다. 정렬이 필요하면 `toList()` 로 복사한 뒤에
+  /// 한다.
+  ///
+  /// **행이 바뀔 때까지 같은 목록을 돌려준다.** [others] 에 건 것과 같은 캐시인데,
+  /// 이쪽이 훨씬 크다 — 사람은 화면에 많아야 수십이지만 몹은 구독 청크(3×3)
+  /// 안에 수백 기가 들어온다(실측 72~640). 그 전부를 매 프레임 다시 지으면
+  /// [ServerMonster] 하나와 [Vector2] 둘이 몹 수만큼, 초당 6 만 개 넘게 태어난다.
+  /// 게임 루프가 [ActionRpgGame._refreshMonsterStreaming] 에서 프레임마다 부르는
+  /// 자리라 그 쓰레기가 고스란히 GC 로 간다.
+  ///
+  /// 서버 행은 몹 AI 틱마다(24 Hz) 바뀌므로 실제로 다시 지어야 하는 것은 그때뿐
+  /// 이다. 60fps 로 그리면 세 프레임 중 둘은 캐시가 받아 낸다.
+  ///
+  /// 캐시가 낡지 않는 근거는 [others] 와 같다 — SDK 의 `TableCache` 는 표가 바뀔
+  /// 때마다 `rows.value` 에 **새 List 를 대입한다**(`_refreshRowsNotifier`).
+  /// 그러니 같은 인스턴스라면 그동안 아무 행도 바뀌지 않은 것이다.
   @override
   List<ServerMonster> get monsters {
+    final source = _monsterRows.value;
     final mine = _myCharacterId;
-    return [
-      for (final row in _monsterRows.value)
+    final cached = _monstersCache;
+    if (cached != null &&
+        identical(source, _monstersSource) &&
+        mine == _monstersCharacterId) {
+      return cached;
+    }
+
+    final built = [
+      for (final row in source)
         ServerMonster(
           id: row.id.toInt(),
           level: row.level,
@@ -438,6 +474,10 @@ class SpacetimeWorldPresence extends WorldPresence {
           lastAttackAtMicros: row.lastAttackAt.toInt(),
         ),
     ];
+    _monstersSource = source;
+    _monstersCharacterId = mine;
+    _monstersCache = built;
+    return built;
   }
 
   @override
