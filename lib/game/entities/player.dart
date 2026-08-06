@@ -876,9 +876,15 @@ class Player extends IsoEntity with Damageable {
     // 그 외에는 부드럽게 당긴다. 오차가 클수록 세게 당겨, 평소 이동은
     // 건드리지 않으면서 벌어진 차이는 확실히 좁힌다.
     //
-    // 자취를 지운다 — 어긋남이 확인된 이상 옛 자취는 더 이상 "따라오는 중" 의
-    // 증거가 아니고, 남겨 두면 다음 판정에서 그 옛 자리가 어긋남을 가린다.
-    _trail.clear();
+    // 🛑 **여기서 자취를 지우면 안 된다.** 지우면 바로 다음 프레임에는 견줄
+    // 자취가 없어 다시 *지금 위치*와 견주게 되는데, 지금 위치와 서버 사이에는
+    // 언제나 왕복 지연만큼(초당 3.6타일 × 0.3~1.5초) 간격이 있다. 그 간격이
+    // 또 어긋남으로 읽혀 또 지운다 — 한 번 걸리면 빠져나오지 못하는 덫이고,
+    // 걷어냈던 고무줄이 그대로 되살아난다. 실측하면 어긋남 한 번 뒤로 2 초에
+    // 7.2 타일 갈 것이 3.5 타일로 줄었다(`move_reconcile_test.dart`).
+    //
+    // 옛 자취가 어긋남을 가리는 것은 [_trailWindow] 가 막는다. 3 초가 지나면
+    // 그 자리들은 스스로 사라지므로, 진짜로 계속 어긋나 있으면 결국 드러난다.
     final strength = error > _reconcileHardError
         ? _reconcileHardRate
         : _reconcileSoftRate;
@@ -904,10 +910,12 @@ class Player extends IsoEntity with Damageable {
   /// 자취를 남겨 두는 시간. 왕복 지연의 몇 배는 되어야 한다.
   static const Duration _trailWindow = Duration(seconds: 3);
 
-  /// 서버에 보고한 좌표를 자취에 남긴다.
+  /// 지나온 자리를 자취에 남긴다. 게임 루프가 매 프레임 부른다.
   ///
-  /// 보고하는 쪽에서 부른다 — 서버가 실제로 받는 것이 이 값들이므로, 화면의
-  /// 매 프레임 위치가 아니라 **보낸 값**을 남겨야 견줄 수 있다.
+  /// **보고 주기(10 Hz)가 아니라 프레임마다 남긴다.** 서버가 아는 자리는 언제나
+  /// 보낸 값 중 하나이고 보낸 값은 프레임 위치의 부분집합이므로, 촘촘히 남길수록
+  /// "서버가 내 자취 위에 있는가" 를 놓칠 일이 없다. 보낸 값만 남기면 그 사이
+  /// 0.36 타일이 비어, 그 틈에 떨어진 서버 좌표가 어긋남으로 잘못 읽힌다.
   void recordReportedGrid(Vector2 reported) {
     final now = DateTime.now();
     _trail.add((at: now, grid: reported.clone()));
@@ -920,14 +928,17 @@ class Player extends IsoEntity with Damageable {
   /// 자취에서 [point] 까지의 가장 가까운 거리.
   ///
   /// 자취가 비어 있으면(막 태어났거나 오프라인) 지금 위치와 견준다.
+  ///
+  /// 견주는 동안에는 **제곱 거리**로 두고 마지막에 한 번만 제곱근을 뽑는다.
+  /// 자취는 매 프레임 쌓이므로 3 초면 백여 점이 되는데, 그 전부에 제곱근을
+  /// 씌워 봐야 가장 작은 것을 고르는 순서는 달라지지 않는다.
   double _distanceFromTrail(Vector2 point) {
-    if (_trail.isEmpty) return point.distanceTo(grid);
-    var best = point.distanceTo(grid);
+    var best = point.distanceToSquared(grid);
     for (final entry in _trail) {
-      final d = point.distanceTo(entry.grid);
-      if (d < best) best = d;
+      final d2 = point.distanceToSquared(entry.grid);
+      if (d2 < best) best = d2;
     }
-    return best;
+    return math.sqrt(best);
   }
 
   /// 이보다 크게 어긋나면 보정 대신 즉시 맞춘다(타일).

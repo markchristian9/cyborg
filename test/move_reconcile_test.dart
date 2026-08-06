@@ -95,6 +95,58 @@ void main() {
     expect(player.grid.x, lessThan(before));
   });
 
+  /// **한 번 보정한 뒤에도 자취 판정이 계속 살아 있는지** 본다.
+  ///
+  /// 보정이 자취를 지워 버리면, 바로 다음 프레임에는 견줄 자취가 없어 다시
+  /// **지금 위치**와 견주게 된다. 그런데 지금 위치와 서버 사이에는 언제나 왕복
+  /// 지연만큼의 간격이 있으므로 그것이 또 어긋남으로 읽히고, 또 지운다 —
+  /// 한 번 걸리면 빠져나오지 못하는 덫이다. 고무줄이 그대로 돌아온다.
+  ///
+  /// 어긋남은 실제로 한 번씩 일어난다(넉백, 몹에게 밀림, 잘린 보고 한 번).
+  /// 그때마다 이후의 이동이 통째로 느려지면 안 된다.
+  test('한 번 어긋난 뒤에도 걸음이 느려지지 않는다', () {
+    const speed = 3.6;
+    const reportHz = 10.0;
+    const dt = 1 / reportHz;
+    const step = speed / reportHz;
+    const lagFrames = 5; // 0.5 초
+
+    final player =
+        Player(grid: Vector2(100, 100), design: CyborgDesign.assault);
+    final reported = <Vector2>[];
+
+    // 1) 1 초 걷는다 — 자취를 쌓는다.
+    for (var i = 0; i < 10; i++) {
+      player.grid.x += step;
+      player.recordReportedGrid(player.grid);
+      reported.add(player.grid.clone());
+    }
+
+    // 2) 어긋남 한 번. 자취에서 벗어난 좌표가 한 번 들어온다.
+    player.reconcileServerGrid(Vector2(player.grid.x, 102), dt);
+
+    // 3) 다시 2 초를 같은 속도로 걷는다. 서버는 정상적으로 자취를 따라온다.
+    final resumeAt = player.grid.x;
+    for (var i = 0; i < 20; i++) {
+      player.grid.x += step;
+      player.recordReportedGrid(player.grid);
+      reported.add(player.grid.clone());
+
+      final serverIndex = reported.length - 1 - lagFrames;
+      if (serverIndex >= 0) {
+        player.reconcileServerGrid(reported[serverIndex], dt);
+      }
+    }
+
+    final travelled = player.grid.x - resumeAt;
+    expect(
+      travelled,
+      closeTo(2.0 * speed, 0.4),
+      reason: '어긋남 한 번 뒤로 걸음이 $travelled 타일밖에 안 된다 '
+          '(2 초면 ${2.0 * speed} 타일) — 보정이 자취를 지워 고무줄이 되살아났다',
+    );
+  });
+
   test('아주 멀리 떨어지면 즉시 옮긴다 — 텔레포트·재가동', () {
     final player =
         Player(grid: Vector2(100, 100), design: CyborgDesign.assault);

@@ -246,9 +246,18 @@ class ActionButton extends PositionComponent
 }
 
 /// 반투명한 원형 조이스틱 배경을 그리는 컴포넌트.
+///
+/// 🛑 **손잡이와 달리 `anchor` 를 건드리지 않는다.** [JoystickComponent] 는
+/// 손잡이의 기준점을 자기가 정하지만(`knob.anchor = Anchor.center`), 배경은
+/// `add` 하기만 하고 손대지 않는다. 그래서 배경은 기본값인 좌상단 기준으로
+/// 남아 있어야 조이스틱 상자를 (0,0) 부터 가득 채운다.
+///
+/// 여기에 `Anchor.center` 를 주면 배경이 상자의 **모서리**를 중심으로 그려져
+/// 반경만큼(62픽셀) 왼쪽 위로 밀린다 — 손잡이는 제자리인데 테두리만 어긋난
+/// 모습이다. 생성자의 `assert` 는 `position` 이 0 인지만 보므로 이것을
+/// 잡아 주지 않고, 예외도 나지 않는다.
 class JoystickBase extends PositionComponent {
-  JoystickBase({required this.radius})
-      : super(size: Vector2.all(radius * 2), anchor: Anchor.center);
+  JoystickBase({required this.radius}) : super(size: Vector2.all(radius * 2));
 
   final double radius;
 

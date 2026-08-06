@@ -544,11 +544,43 @@ class SpacetimeWorldPresence extends WorldPresence {
     return null;
   }
 
+  /// [others] 가 마지막으로 옮겨 담은 행 목록. 캐시가 아직 쓸 만한지 가리는 열쇠다.
+  List<WorldPlayer>? _othersSource;
+
+  /// 그렇게 옮겨 담은 결과. [_othersSource] 가 그대로면 이것을 그대로 준다.
+  List<RemotePlayer>? _othersCache;
+
+  /// 캐시를 만들 때의 내 identity. 재접속하면 달라지므로 함께 본다.
+  Identity? _othersIdentity;
+
+  /// 나를 뺀 다른 요원들.
+  ///
+  /// 🛑 **돌려주는 목록을 고쳐 쓰지 말 것.** 호출한 쪽마다 같은 목록을 나눠
+  /// 쓰므로 `sort` 나 `add` 는 남의 화면까지 흔든다. 정렬이 필요하면 `toList()`
+  /// 로 복사한 뒤에 한다([ActionRpgGame._syncRemotePlayers] 가 그렇게 한다).
+  ///
+  /// **행이 바뀔 때까지 같은 목록을 돌려준다.** 이 게터는 한 프레임에 네댓 번
+  /// 불린다 — 게임 루프, 레이더, HUD 인원수, 추종 대상 찾기, 고른 요원 찾기가
+  /// 저마다 부른다. 매번 새로 지으면 사람 수만큼 [RemotePlayer] 와 그 세 배의
+  /// [Vector2] 가 초당 수만 개씩 태어나 GC 가 프레임을 갉는다. 서버 행은 틱마다
+  /// (24 Hz) 바뀌므로 실제로 다시 지어야 하는 것은 그때뿐이다.
+  ///
+  /// 캐시가 낡지 않는 근거는 SDK 에 있다. `TableCache` 는 표가 바뀔 때마다
+  /// `rows.value` 에 **새 List 를 대입한다**(`List<T>.of(...)`). 그러니 같은
+  /// 인스턴스라면 그동안 아무 행도 바뀌지 않은 것이다.
   @override
   List<RemotePlayer> get others {
+    final source = _rows.value;
     final me = _client.identity;
-    return [
-      for (final row in _rows.value)
+    final cached = _othersCache;
+    if (cached != null &&
+        identical(source, _othersSource) &&
+        me == _othersIdentity) {
+      return cached;
+    }
+
+    final built = [
+      for (final row in source)
         if (row.identity != me)
           RemotePlayer(
             characterId: row.characterId.toInt(),
@@ -565,5 +597,9 @@ class SpacetimeWorldPresence extends WorldPresence {
             facing: Vector2(row.facingX, row.facingY),
           ),
     ];
+    _othersSource = source;
+    _othersIdentity = me;
+    _othersCache = built;
+    return built;
   }
 }

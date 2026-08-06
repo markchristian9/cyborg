@@ -393,7 +393,10 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     final joystick = JoystickComponent(
       knob: JoystickKnob(radius: 26),
       background: JoystickBase(radius: 62),
-      margin: const EdgeInsets.only(left: 40, bottom: 40),
+      margin: const EdgeInsets.only(
+        left: _joystickMargin,
+        bottom: _joystickMargin,
+      ),
       priority: 90,
     );
     _joystick = joystick;
@@ -423,7 +426,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         icon: ActionIcon.zoomIn,
         id: 'zoomIn',
         color: GamePalette.hudBorder,
-        radius: 22,
+        radius: _zoomButtonRadius,
         onPressed: zoomIn,
         enabledCheck: () => canZoomIn,
         position: Vector2.zero(),
@@ -433,7 +436,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         icon: ActionIcon.zoomOut,
         id: 'zoomOut',
         color: GamePalette.hudBorder,
-        radius: 22,
+        radius: _zoomButtonRadius,
         onPressed: zoomOut,
         enabledCheck: () => canZoomOut,
         position: Vector2.zero(),
@@ -535,12 +538,17 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
           child.position = Vector2(size.x - 176, size.y - 74);
         case 'dash':
           child.position = Vector2(size.x - 92, size.y - 188);
-        // 배율 버튼은 왼쪽 아래, 조이스틱 위에 세로로 세운다. 오른손 액션
-        // 버튼과 멀리 떼어 놓아야 전투 중에 잘못 누르지 않는다.
+        // 배율 버튼은 왼쪽 아래, 조이스틱 **위쪽 바깥**에 세로로 세운다.
+        // 오른손 액션 버튼과 멀리 떼어 놓아야 전투 중에 잘못 누르지 않는다.
+        //
+        // 🛑 조이스틱 원과 겹치면 안 된다. 겹치는 자리는 걸어 다니는 동안 손이
+        // 지나가는 자리이고, 무엇보다 그 위에는 조이스틱 탭 차폐막이 덮여 있어
+        // 눌러도 반응하지 않는다. 좌표를 손으로 적어 두면 조이스틱 크기를 바꿀
+        // 때 조용히 다시 겹치므로 원의 위 끝에서 되짚는다.
         case 'zoomIn':
-          child.position = Vector2(52, size.y - 176);
+          child.position = _zoomButtonSlot(1);
         case 'zoomOut':
-          child.position = Vector2(52, size.y - 124);
+          child.position = _zoomButtonSlot(0);
       }
     }
     // 자동 사냥은 대시 버튼 위로 이어 세운다. 위가 늘리기, 아래가 줄이기다.
@@ -576,14 +584,52 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 탭 차폐막을 조이스틱·HUD 패널 위에 다시 맞춘다.
     for (final shield in camera.viewport.children.whereType<TapShield>()) {
       if (shield.anchor == Anchor.center) {
-        // 조이스틱: 좌하단 여백 40 + 배경 반경 62.
-        shield.position = Vector2(_joystickRadius + 40, size.y - _joystickRadius - 40);
+        shield.position = _joystickCenter;
       }
     }
   }
 
   /// 가상 조이스틱 배경의 반경. 탭 차폐막 크기를 맞추는 데 쓴다.
   static const double _joystickRadius = 62;
+
+  /// 조이스틱을 화면 왼쪽·아래에서 띄우는 여백.
+  ///
+  /// [JoystickComponent] 의 `margin` 과 **같은 값이어야 한다.** 어긋나면 차폐막과
+  /// 배율 버튼이 조이스틱이 실제로 있는 자리와 다른 곳을 기준으로 놓인다.
+  static const double _joystickMargin = 40;
+
+  /// 조이스틱 원의 중심(뷰포트 좌표).
+  ///
+  /// 차폐막과 배율 버튼이 모두 이 값을 기준으로 놓인다. 회귀 테스트가 "버튼이
+  /// 원 밖에 있는가" 를 물을 때도 같은 값을 봐야 한다 — 테스트가 좌표를 따로
+  /// 계산하면 둘이 함께 틀려도 통과한다.
+  @visibleForTesting
+  Vector2 get joystickCenter => _joystickCenter;
+
+  /// 조이스틱 원의 반경. [joystickCenter] 와 함께 쓴다.
+  @visibleForTesting
+  double get joystickRadius => _joystickRadius;
+
+  Vector2 get _joystickCenter => Vector2(
+        _joystickMargin + _joystickRadius,
+        size.y - _joystickMargin - _joystickRadius,
+      );
+
+  /// 배율 버튼의 반경. [_addTouchControls] 에서 만드는 값과 같아야 한다.
+  static const double _zoomButtonRadius = 22;
+
+  /// 조이스틱 위로 [slot] 번째(0 이 가장 아래) 배율 버튼이 설 자리.
+  ///
+  /// 조이스틱 원의 **위 끝**에서 되짚으므로, 조이스틱을 키우거나 여백을 바꿔도
+  /// 버튼이 원 안으로 파고들지 않는다.
+  Vector2 _zoomButtonSlot(int slot) {
+    const gap = 10.0;
+    final circleTop = _joystickCenter.y - _joystickRadius;
+    return Vector2(
+      _joystickCenter.x,
+      circleTop - gap - _zoomButtonRadius - slot * (_zoomButtonRadius * 2 + gap),
+    );
+  }
 
   /// 조이스틱·HUD 위의 탭이 월드로 새지 않도록 차폐막을 덮는다.
   ///
@@ -594,7 +640,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     camera.viewport.addAll([
       // 조이스틱
       TapShield(
-        position: Vector2(_joystickRadius + 40, size.y - _joystickRadius - 40),
+        position: _joystickCenter,
         size: Vector2.all(_joystickRadius * 2),
         anchor: Anchor.center,
       ),
@@ -767,12 +813,31 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 가까운 [_maxRemotePlayers] 명만 그린다. 구독이 면적만 자르므로 안전지대처럼
     // 사람이 몰리는 곳에서는 수백 명이 올 수 있고, 그대로 다 만들면 저사양 기기가
     // 먼저 무너진다. 화면에 보이지도 않는 사람을 위해 컴포넌트를 만들 이유가 없다.
-    final all = presence.others.toList()
-      ..sort((a, b) => (a.grid - player.grid)
-          .length2
-          .compareTo((b.grid - player.grid).length2));
-    final visible =
-        all.length > _maxRemotePlayers ? all.take(_maxRemotePlayers) : all;
+    //
+    // **정원을 넘을 때만 줄을 세운다.** 이 메서드는 매 프레임 돈다. 평소 인원은
+    // 정원보다 적으므로, 그때 정렬은 순서만 바꿔 놓고 결과는 똑같은 순수한 낭비다.
+    //
+    // 🛑 [WorldPresence.others] 가 주는 목록을 그 자리에서 `sort` 하면 안 된다.
+    // 그것은 호출부마다 나눠 쓰는 **같은 목록**이라, 여기서 뒤집으면 레이더와
+    // HUD 까지 함께 흔들린다. 복사한 뒤에 세운다.
+    final all = presence.others;
+    final Iterable<RemotePlayer> visible;
+    if (all.length <= _maxRemotePlayers) {
+      visible = all;
+    } else {
+      // 거리는 스칼라로 잰다. `a.grid - player.grid` 는 비교마다 [Vector2] 를
+      // 하나씩 만들어 내는데, 정렬은 그 비교를 n log n 번 한다.
+      final px = player.grid.x;
+      final py = player.grid.y;
+      double dist2(RemotePlayer p) {
+        final dx = p.grid.x - px;
+        final dy = p.grid.y - py;
+        return dx * dx + dy * dy;
+      }
+
+      visible = (all.toList()..sort((a, b) => dist2(a).compareTo(dist2(b))))
+          .take(_maxRemotePlayers);
+    }
 
     for (final other in visible) {
       seen.add(other.characterId);
@@ -1468,19 +1533,32 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 화면 경계는 아이소메트릭에서 마름모라 이 사각형이 실제 시야보다 넉넉하다.
     // 넉넉한 쪽이 맞다 — 가장자리에서 몹이 갑자기 튀어나오는 것보다 낫다.
     final bounds = visibleGridBounds(margin: 4);
-    final byPriority = presence.monsters.toList()
-      ..sort((a, b) {
-        final aInView = bounds.contains(Offset(a.grid.x, a.grid.y));
-        final bInView = bounds.contains(Offset(b.grid.x, b.grid.y));
-        if (aInView != bInView) return aInView ? -1 : 1;
-        return (a.grid - player.grid)
-            .length2
-            .compareTo((b.grid - player.grid).length2);
+    final px = player.grid.x;
+    final py = player.grid.y;
+
+    // **정렬 키를 미리 한 번씩만 매긴다.** 비교 안에서 재면 `Vector2` 뺄셈과
+    // `Offset` 이 비교마다 태어나고, 정렬은 그 비교를 n log n 번 한다 — 몹이
+    // 조밀한 사냥터에서는 한 번 돌 때마다 쓰레기가 수천 개씩 나온다.
+    final byPriority = [
+      for (final m in presence.monsters)
+        (
+          monster: m,
+          inView: m.grid.x >= bounds.left &&
+              m.grid.x <= bounds.right &&
+              m.grid.y >= bounds.top &&
+              m.grid.y <= bounds.bottom,
+          dist2: (m.grid.x - px) * (m.grid.x - px) +
+              (m.grid.y - py) * (m.grid.y - py),
+        ),
+    ]..sort((a, b) {
+        if (a.inView != b.inView) return a.inView ? -1 : 1;
+        return a.dist2.compareTo(b.dist2);
       });
 
-    for (final snapshot in byPriority) {
+    for (final entry in byPriority) {
+      final snapshot = entry.monster;
       // 멀리 있는 것은 아직 그리지 않는다.
-      if ((snapshot.grid - player.grid).length2 > visible) continue;
+      if (entry.dist2 > visible) continue;
 
       final existing = _activeMonsters[snapshot.id];
       if (existing != null) {

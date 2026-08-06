@@ -731,26 +731,52 @@ class Enemy extends IsoEntity with Damageable {
 
   static const double _nameTagRangeSquared = 7.0 * 7.0;
 
-  Paint get _shell => Paint()
-    ..color = Color.lerp(
-      palette.shell,
-      Colors.white,
-      _hitFlash * 0.7,
-    )!;
+  // ── 껍데기 붓 ───────────────────────────────────────────────────────
+  //
+  // 이 셋은 **한 기를 그리는 동안 네 번에서 열두 번까지 읽힌다**(종의 골격마다
+  // 다르다). 읽을 때마다 [Paint] 를 새로 지으면 몹 한 기당 그만큼이 매 프레임
+  // 태어나고, 화면에는 [ActionRpgGame._maxActiveMonsters] 만큼, 즉 360 기까지
+  // 선다 — 초당 수십만 개다.
+  //
+  // 색이 달라지는 것은 피격 섬광([_hitFlash]) 하나뿐이고 [palette] 는 종이
+  // 정한 값이라 개체가 사는 동안 바뀌지 않는다. 그래서 섬광이 움직였을 때만
+  // 다시 칠하고, 그 외에는 같은 붓을 그대로 넘긴다.
+  //
+  // 🛑 **돌려받은 붓을 그리는 쪽에서 고치지 말 것.** 세 개를 온 개체가 돌려
+  // 쓰므로 `..style` 이나 `..strokeWidth` 를 얹으면 그 뒤의 모든 그리기에
+  // 남는다. 지금은 전부 `canvas.drawX(..., 붓)` 으로 넘기기만 한다.
+  final Paint _shellPaint = Paint();
+  final Paint _shellLightPaint = Paint();
+  final Paint _shellDarkPaint = Paint();
 
-  Paint get _shellLight => Paint()
-    ..color = Color.lerp(
-      palette.shellLight,
-      Colors.white,
-      _hitFlash * 0.7,
-    )!;
+  /// 세 붓을 마지막으로 칠했을 때의 [_hitFlash]. 음수면 아직 한 번도 칠하지 않았다.
+  double _shellShadedAt = -1;
 
-  Paint get _shellDark => Paint()
-    ..color = Color.lerp(
-      palette.shellDark,
-      Colors.white,
-      _hitFlash * 0.5,
-    )!;
+  void _refreshShellPaints() {
+    if (_shellShadedAt == _hitFlash) return;
+    _shellShadedAt = _hitFlash;
+    _shellPaint.color =
+        Color.lerp(palette.shell, Colors.white, _hitFlash * 0.7)!;
+    _shellLightPaint.color =
+        Color.lerp(palette.shellLight, Colors.white, _hitFlash * 0.7)!;
+    _shellDarkPaint.color =
+        Color.lerp(palette.shellDark, Colors.white, _hitFlash * 0.5)!;
+  }
+
+  Paint get _shell {
+    _refreshShellPaints();
+    return _shellPaint;
+  }
+
+  Paint get _shellLight {
+    _refreshShellPaints();
+    return _shellLightPaint;
+  }
+
+  Paint get _shellDark {
+    _refreshShellPaints();
+    return _shellDarkPaint;
+  }
 
   /// 센서 아이(발광). 종의 눈 개수만큼 가로로 늘어놓는다.
   void _drawEye(Canvas canvas, Offset center, double radius) {
