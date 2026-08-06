@@ -1,27 +1,22 @@
 #include "../../Flutter/Flutter-Release.xcconfig"
 #include "Warnings.xcconfig"
 
-// ── 배포용 서명 ─────────────────────────────────────────────────────────
-// ad-hoc 서명("-")으로 만든 앱은 만든 기계에서만 열린다. 다른 사람에게 보내면
-// 내려받는 순간 격리(quarantine) 딱지가 붙고, Gatekeeper 가 서명을 확인하지 못해
-// "손상되었기 때문에 열 수 없습니다. 휴지통으로 이동하십시오" 라고 막아 버린다.
+// ── 서명 ────────────────────────────────────────────────────────────────
+// 기본은 ad-hoc("-") 서명이다. 인증서가 없는 기계에서도 Release 로 빌드해서
+// 그 자리에서 실행할 수 있어야 하기 때문이다. 여러 클라이언트를 한꺼번에 띄우는
+// scripts/run.sh 가 쓰는 것이 바로 이 Release 빌드다.
 //
-// App Store 밖으로 앱을 건네주려면 Developer ID 인증서로 서명하고 Apple 에
-// 공증(notarization)까지 받아야 한다. 서명은 여기서, 공증은 배포 스크립트
-// (scripts/release-macos.sh)에서 맡는다.
-CODE_SIGN_STYLE = Manual
-CODE_SIGN_IDENTITY = Developer ID Application
-DEVELOPMENT_TEAM = AX352BQR6K
+// 예전에는 여기서 곧장 Developer ID 로 서명했다. 그러면 인증서가 없는 기계는
+// 빌드조차 못 하고 이렇게 멈춘다.
+//
+//   error: No signing certificate "Developer ID Application" found
+//
+// Developer ID 는 앱을 남에게 건네줄 때만 필요하다. 그래서 배포용 서명 설정은
+// scripts/release-macos.sh 가 빌드 직전에 Signing.xcconfig 로 만들어 끼워 넣고,
+// 끝나면 지운다. 그 파일이 없으면 아래 include 는 조용히 넘어가고 서명은 ad-hoc
+// 으로 남는다(#include? 는 파일이 없어도 오류가 아니다).
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
 PROVISIONING_PROFILE_SPECIFIER =
 
-// 공증의 전제 조건. 켜 두지 않으면 Apple 이 공증 자체를 거절한다.
-ENABLE_HARDENED_RUNTIME = YES
-
-// Xcode 는 시키지 않아도 com.apple.security.get-task-allow 를 앱에 끼워 넣는다.
-// 디버거를 붙일 수 있게 해 주는 권한이라 개발 중에는 필요하지만, 배포판에 남아
-// 있으면 Apple 이 공증을 거절한다("The executable requests the
-// com.apple.security.get-task-allow entitlement"). Release 에서는 끼워 넣지 못하게 막는다.
-CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
-
-// 공증에는 Apple 타임스탬프 서버가 찍어 준 시각이 함께 들어가야 한다.
-OTHER_CODE_SIGN_FLAGS = $(inherited) --timestamp
+#include? "Signing.xcconfig"

@@ -15,8 +15,12 @@
 # 딱지가 붙는데, Gatekeeper 가 그 딱지를 보고 서명을 확인하려다 실패해서 나오는 말이다.
 # 넘어가려면 두 가지가 필요하다.
 #
-#   1. 서명   — Developer ID 인증서로 앱에 도장을 찍는다. (Release.xcconfig 가 처리)
+#   1. 서명   — Developer ID 인증서로 앱에 도장을 찍는다.
 #   2. 공증   — 그 앱을 Apple 에 올려 검사받고, 통과 도장을 앱에 박아 넣는다(staple).
+#
+# 둘 다 이 스크립트가 맡는다. 평소의 `flutter build macos --release` 는 ad-hoc 으로
+# 남겨 둔다. 저장소에 Developer ID 를 못 박아 두면 인증서가 없는 기계에서는
+# 빌드조차 되지 않아, 여러 클라이언트를 띄우는 scripts/run.sh 까지 함께 멈춘다.
 #
 # 서명만 하면 "확인되지 않은 개발자" 경고까지는 줄어들지만 여전히 한 번은 막힌다.
 # 공증까지 마쳐야 받는 사람이 두 번 클릭으로 그냥 실행할 수 있다.
@@ -48,6 +52,20 @@ DO_NOTARIZE=1
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT/build/macos/Build/Products/Release"
 DIST_DIR="$ROOT/build/dist"
+
+# 배포용 서명 설정을 끼워 넣는 자리. Release.xcconfig 가 이 파일을 optional 로
+# include 한다(#include? "Signing.xcconfig"). 평소에는 없어야 한다 — 있으면
+# 인증서가 없는 기계에서 `flutter build macos --release` 가 통째로 실패한다.
+# 그래서 이 스크립트가 빌드 직전에 만들고, 끝나면(실패해도) 지운다.
+SIGNING_CONF="$ROOT/macos/Runner/Configs/Signing.xcconfig"
+
+STAGE=""
+cleanup() {
+  rm -f "$SIGNING_CONF"
+  [[ -n "$STAGE" ]] && rm -rf "$STAGE"
+  return 0
+}
+trap cleanup EXIT
 
 # 공증 계정 등록에 쓸 App Store Connect API 키. 값을 여기 적어 두지 않고 env/ 에서
 # 찾아 읽는다 — env/ 는 저장소에 올라가지 않으므로 키 정보가 새어 나갈 일이 없다.
@@ -147,6 +165,29 @@ echo "  찾음: $SIGN_IDENTITY ($TEAM_ID)"
 APP="$BUILD_DIR/$APP_NAME.app"
 
 if [[ $DO_BUILD -eq 1 ]]; then
+  say "배포용 서명 설정을 끼운다"
+  cat > "$SIGNING_CONF" <<EOF
+// scripts/release-macos.sh 가 만든 파일이다. 빌드가 끝나면 스스로 지운다.
+// 손으로 만들지 마라. 저장소에 남으면 인증서 없는 기계에서 Release 빌드가 깨진다.
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = $SIGN_IDENTITY
+DEVELOPMENT_TEAM = $TEAM_ID
+PROVISIONING_PROFILE_SPECIFIER =
+
+// 공증의 전제 조건. 켜 두지 않으면 Apple 이 공증 자체를 거절한다.
+ENABLE_HARDENED_RUNTIME = YES
+
+// Xcode 는 시키지 않아도 com.apple.security.get-task-allow 를 앱에 끼워 넣는다.
+// 디버거를 붙일 수 있게 해 주는 권한이라 개발 중에는 필요하지만, 배포판에 남아
+// 있으면 Apple 이 공증을 거절한다("The executable requests the
+// com.apple.security.get-task-allow entitlement").
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
+
+// 공증에는 Apple 타임스탬프 서버가 찍어 준 시각이 함께 들어가야 한다.
+OTHER_CODE_SIGN_FLAGS = \$(inherited) --timestamp
+EOF
+  echo "  $SIGNING_CONF"
+
   say "Release 로 빌드한다 (몇 분 걸린다)"
   cd "$ROOT"
   flutter build macos --release
@@ -158,7 +199,7 @@ fi
 
 # ── 2. 서명 확인 ────────────────────────────────────────────────────────
 #
-# Xcode 가 Release.xcconfig 를 보고 이미 서명했어야 한다. 정말 그랬는지,
+# Xcode 가 방금 끼워 넣은 Signing.xcconfig 를 보고 서명했어야 한다. 정말 그랬는지,
 # ad-hoc 으로 새어 나가지는 않았는지 여기서 못을 박는다.
 
 say "서명을 확인한다"
@@ -166,8 +207,9 @@ SIGN_INFO="$(codesign -dvv "$APP" 2>&1)"
 
 if grep -q "Signature=adhoc" <<<"$SIGN_INFO"; then
   die "아직 ad-hoc 서명이다. 이대로는 남의 Mac 에서 휴지통으로 간다.
-   macos/Runner/Configs/Release.xcconfig 의 서명 설정을 확인하고
-   'flutter clean' 후 다시 빌드해 보라."
+   평소의 'flutter build macos --release' 는 일부러 ad-hoc 으로 만든다.
+   배포판은 이 스크립트가 직접 빌드해야 Developer ID 로 서명된다.
+   --no-build 없이 다시 실행해라."
 fi
 
 AUTHORITY="$(grep -m1 '^Authority=' <<<"$SIGN_INFO" | cut -d= -f2-)"
@@ -178,7 +220,7 @@ echo "  서명자: $AUTHORITY"
 # Hardened Runtime 이 켜져 있어야 공증을 받아 준다.
 if ! grep -q "flags=.*runtime" <<<"$SIGN_INFO"; then
   die "Hardened Runtime 이 꺼져 있어 공증을 받을 수 없다.
-   Release.xcconfig 의 ENABLE_HARDENED_RUNTIME = YES 를 확인하라."
+   이 스크립트가 만드는 Signing.xcconfig 의 ENABLE_HARDENED_RUNTIME = YES 를 확인하라."
 fi
 echo "  Hardened Runtime: 켜짐"
 
@@ -187,8 +229,8 @@ echo "  Hardened Runtime: 켜짐"
 ENTS="$(codesign -d --entitlements - --xml "$APP" 2>/dev/null | plutil -p - 2>/dev/null || true)"
 if grep -q "get-task-allow" <<<"$ENTS"; then
   die "앱에 디버거 부착 권한(get-task-allow)이 들어 있다. 이대로는 공증이 거절된다.
-   Release.xcconfig 의 CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO 를 확인하고
-   'flutter clean' 후 다시 빌드하라."
+   이 스크립트가 만드는 Signing.xcconfig 의 CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO 를
+   확인하고 'flutter clean' 후 다시 빌드하라."
 fi
 echo "  디버그 권한 없음"
 
@@ -259,8 +301,7 @@ if [[ "$FORMAT" == "dmg" ]]; then
   say "DMG 를 만든다: $(basename "$ARTIFACT")"
 
   # 앱과 /Applications 바로가기를 함께 담아, 받는 사람이 끌어다 놓기만 하면 되게 한다.
-  STAGE="$(mktemp -d)"
-  trap 'rm -rf "$STAGE"' EXIT
+  STAGE="$(mktemp -d)"   # 끝나면 cleanup() 이 지운다
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
 

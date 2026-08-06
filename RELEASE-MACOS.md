@@ -25,15 +25,28 @@
 
 두 겹이다.
 
-**① 서명** — [macos/Runner/Configs/Release.xcconfig](macos/Runner/Configs/Release.xcconfig)
+**① 서명** — [scripts/release-macos.sh](scripts/release-macos.sh)
 
-Release 빌드에 Developer ID 인증서로 진짜 도장을 찍는다. 이걸로 휴지통 문제는 끝난다.
+배포 빌드에 Developer ID 인증서로 진짜 도장을 찍는다. 이걸로 휴지통 문제는 끝난다.
 함께 켠 것이 둘 더 있다.
 
 | 설정 | 왜 |
 |---|---|
 | `ENABLE_HARDENED_RUNTIME = YES` | 공증의 전제 조건. 꺼져 있으면 Apple 이 검사 자체를 거절한다 |
 | `CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO` | 아래 함정 참고 |
+
+이 설정들은 저장소에 못 박혀 있지 않다. 스크립트가 빌드 직전에
+`macos/Runner/Configs/Signing.xcconfig` 로 만들어 끼웠다가(Release.xcconfig 가
+`#include?` 로 받는다) 끝나면 지운다. 못 박아 두면 Developer ID 인증서가 없는 기계에서
+평범한 `flutter build macos --release` 마저 이렇게 멈춰, 여러 클라이언트를 띄우는
+[scripts/run.sh](scripts/run.sh) 까지 함께 죽는다.
+
+```
+error: No signing certificate "Developer ID Application" found
+```
+
+그래서 평소 Release 빌드는 ad-hoc 서명이다. 내 기계에서 실행하는 데는 그걸로 충분하고,
+남에게 건넬 앱은 이 스크립트가 직접 빌드한다(`--no-build` 로는 배포판이 안 나온다).
 
 **② 공증** — [scripts/release-macos.sh](scripts/release-macos.sh)
 

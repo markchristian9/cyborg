@@ -52,3 +52,7 @@ env/
 
 # 로컬 도구 링크(개발자마다 경로가 다르다)
 .claude/
+
+# 배포할 때만 잠깐 생겼다 사라지는 서명 설정(scripts/release-macos.sh 가 만든다).
+# 저장소에 남으면 Developer ID 인증서가 없는 기계에서 Release 빌드가 실패한다.
+/macos/Runner/Configs/Signing.xcconfig
