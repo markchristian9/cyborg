@@ -448,8 +448,11 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         color: GamePalette.playerAccent,
         radius: 28,
         onPressed: () => player.tryDash(),
-        cooldownRatio: () => player.dashCooldownRatio,
-        enabledCheck: () => player.energy >= 20,
+        // 에너지가 모자랄 때 버튼을 잠그지 않는다. 잠근 버튼은 눌림 자체를
+        // 삼켜 [Player.tryDash] 까지 닿지 않으므로, 눌러도 아무 소리가 나지
+        // 않아 조작이 죽은 것처럼 느껴진다. 대신 덮개로 남은 정도를 보이고,
+        // 눌리면 "아직 안 된다" 를 소리로 답한다.
+        cooldownRatio: () => player.dashBlockedRatio,
         position: Vector2.zero(),
         priority: 90,
       ),

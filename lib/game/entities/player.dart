@@ -156,6 +156,7 @@ class Player extends IsoEntity with Damageable {
   double _shootCooldown = 0;
   double _dashTimer = 0;
   double _dashCooldown = 0;
+  double _dashDenyTimer = 0;
   double _invulnerable = 0;
   double _hazardTick = 0;
   double _deathTimer = 0;
@@ -178,10 +179,30 @@ class Player extends IsoEntity with Damageable {
   static const double _dashDuration = 0.18;
   static const double _dashSpeed = 13.0;
 
+  /// 대시 한 번에 드는 에너지.
+  static const double dashEnergyCost = 20;
+
+  /// 나갈 수 없는 대시를 눌렀다고 알리는 소리의 최소 간격(초).
+  ///
+  /// 재사용 대기(0.9초)의 절반을 조금 넘겨, 한 번의 대기마다 알림도 한 번만
+  /// 울리게 했다. 버튼을 쥐고 있으면 이 알림이 초당 여덟 번 불리므로 사이를
+  /// 두지 않으면 소리가 기관총이 된다.
+  static const double _dashDenyInterval = 0.5;
+
   bool get isDashing => _dashTimer > 0;
   bool get isInvulnerable => _invulnerable > 0;
   double get dashCooldownRatio =>
       (_dashCooldown / 0.9).clamp(0.0, 1.0).toDouble();
+
+  /// 대시가 아직 나갈 수 없는 정도(0~1). 0 이면 지금 나간다.
+  ///
+  /// 재사용 대기와 에너지 부족 중 더 모자란 쪽을 보여 준다. 버튼을 아예
+  /// 잠가 버리면 눌러도 아무 일이 일어나지 않아 조작이 죽은 것처럼 느껴지므로,
+  /// 잠그는 대신 이 값으로 "얼마나 남았는지" 를 덮어 그린다.
+  double get dashBlockedRatio => math.max(
+        dashCooldownRatio,
+        ((dashEnergyCost - energy) / dashEnergyCost).clamp(0.0, 1.0).toDouble(),
+      );
 
   // ── 입력 진입점 ─────────────────────────────────────────────────────
 
@@ -310,21 +331,38 @@ class Player extends IsoEntity with Damageable {
   static const double plasmaAimRange = 10;
 
   /// 회피 대시를 시도한다.
+  ///
+  /// 대시는 0.9초에 한 번만 나간다. 그 사이에 누른 것은 아무 일도 하지 않지만
+  /// 소리로는 답한다 — 눌렀는데 아무 소리도 나지 않으면 조작이 먹히지 않는
+  /// 것인지 아직 준비가 안 된 것인지 알 길이 없다.
   void tryDash() {
-    if (!isAlive || _dashCooldown > 0) return;
-    if (energy < 20) {
-      GameAudio.play(Sfx.uiError);
+    if (!isAlive) return;
+    if (_dashCooldown > 0 || energy < dashEnergyCost) {
+      _denyDash();
       return;
     }
     if (moveInput.length2 > 0.01) {
       facing.setFrom(moveInput.normalized());
     }
-    energy -= 20;
+    energy -= dashEnergyCost;
     _dashTimer = _dashDuration;
     _dashCooldown = 0.9;
+    // 방금 울린 대시 소리에 '아직 안 됨' 이 바로 겹치지 않도록 사이를 둔다.
+    // 이렇게 하면 한 번의 대기마다 알림이 정확히 한 번 울린다.
+    _dashDenyTimer = _dashDenyInterval;
     _invulnerable = math.max(_invulnerable, _dashDuration + 0.08);
     state = PlayerState.dash;
     GameAudio.play(Sfx.dash);
+  }
+
+  /// 아직 나갈 수 없는 대시를 눌렀다고 알린다.
+  ///
+  /// 버튼을 쥐고 있으면 이 알림이 초당 여덟 번 불린다. 그대로 울리면 소리가
+  /// 기관총이 되므로 [_dashDenyInterval] 만큼 사이를 둔다.
+  void _denyDash() {
+    if (_dashDenyTimer > 0) return;
+    _dashDenyTimer = _dashDenyInterval;
+    GameAudio.play(Sfx.uiError, volumeScale: 0.55);
   }
 
   // ── 갱신 ────────────────────────────────────────────────────────────
@@ -402,6 +440,7 @@ class Player extends IsoEntity with Damageable {
     if (_meleeCooldown > 0) _meleeCooldown -= dt;
     if (_shootCooldown > 0) _shootCooldown -= dt;
     if (_dashCooldown > 0) _dashCooldown -= dt;
+    if (_dashDenyTimer > 0) _dashDenyTimer -= dt;
     if (_invulnerable > 0) _invulnerable -= dt;
     if (_comboWindow > 0) _comboWindow -= dt;
     if (_dashTimer > 0) {
