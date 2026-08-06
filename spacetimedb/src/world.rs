@@ -1926,24 +1926,25 @@ pub fn monster_ai(ctx: &ReducerContext, _timer: MonsterAiTimer) {
     let mut hurt: std::collections::HashMap<Identity, i32> = std::collections::HashMap::new();
 
     for (_, monster) in nearby {
-        // 가장 가까운 플레이어를 고른다. 사람 수는 적으므로 전부 재도 싸다.
-        let mut target: Option<(&WorldPlayer, f32)> = None;
-        for player in &players {
-            let d2 = dist_sq(monster.grid_x, monster.grid_y, player.grid_x, player.grid_y);
-            if target.is_none() || d2 < target.unwrap().1 {
-                target = Some((player, d2));
-            }
-        }
-        let Some((player, dist_sq_to_player)) = target else {
-            continue;
-        };
-        let distance = dist_sq_to_player.sqrt();
+        // 쫓을 수 있는 사람 중 가장 가까운 사람을 고른다. 사람 수는 적으므로
+        // 전부 재도 싸다.
+        let target = nearest_huntable(
+            monster.grid_x,
+            monster.grid_y,
+            players.iter().map(|p| (p, p.grid_x, p.grid_y)),
+        );
         let from_home = dist_sq(monster.grid_x, monster.grid_y, monster.home_x, monster.home_y)
             .sqrt();
 
-        // 너무 멀리 끌려왔거나 대상이 어그로를 벗어나면 제자리로 돌아간다.
-        // 이 줄이 없으면 몹이 월드를 가로질러 끌려다니고, 사냥터가 무너진다.
-        let go_home = distance > MONSTER_LEASH_TILES || from_home > MONSTER_MAX_ROAM_TILES;
+        // 쫓을 사람이 아무도 없거나(모두 안전지대 안이다), 너무 멀리 끌려왔거나
+        // 대상이 어그로를 벗어나면 제자리로 돌아간다. 돌아가는 줄이 없으면 몹이
+        // 월드를 가로질러 끌려다니고, 사냥터가 무너진다.
+        let go_home = match target {
+            None => true,
+            Some((_, d2)) => {
+                d2.sqrt() > MONSTER_LEASH_TILES || from_home > MONSTER_MAX_ROAM_TILES
+            }
+        };
 
         if go_home {
             if from_home > 0.2 {
@@ -1971,14 +1972,12 @@ pub fn monster_ai(ctx: &ReducerContext, _timer: MonsterAiTimer) {
             continue;
         }
 
+        // `go_home` 이 거짓이면 대상이 반드시 있다(없으면 위에서 돌아갔다).
+        let (player, dist_sq_to_player) = target.expect("go_home 이 거짓이면 대상이 있다");
+        let distance = dist_sq_to_player.sqrt();
+
         if distance > MONSTER_AGGRO_TILES {
             continue; // 아직 못 봤다. 제자리에 선다.
-        }
-
-        // 안전지대 안의 사람은 쫓지 않는다. 쉬는 곳까지 따라오면 회복할 자리가
-        // 월드에서 사라진다.
-        if in_safe_zone(player.grid_x, player.grid_y) {
-            continue;
         }
 
         if distance > ATTACK_RANGE_TILES {
@@ -2200,6 +2199,34 @@ pub fn pick_loot(ctx: &ReducerContext, loot_id: u64) -> Result<(), String> {
 ///
 /// 기준은 0.01 타일 — 화면에서 보이지 않는 크기이며,
 /// [`step_toward`] 가 목표를 지나치지 않으므로 도착 후에는 정확히 0 이 된다.
+/// 몹이 **쫓을 수 있는** 후보 중 가장 가까운 것과 그 거리의 제곱.
+///
+/// 🛑 **안전지대 안의 사람은 후보에서 뺀다.** 예전에는 가장 가까운 사람을 먼저
+/// 고른 뒤에 "그 사람이 안전지대에 있으면 이번 틱을 건너뛴다" 고 했는데, 그러면
+/// 마을에 선 사람 하나 때문에 **바로 옆에 붙어 선 다른 요원까지** 보지 못한다 —
+/// 안전지대 언저리의 몹이 통째로 잠들고, 사냥터 한 귀퉁이가 조용히 무해해진다.
+/// 안전지대는 쉴 자리를 지키는 규칙이지, 곁에 선 사람까지 덮어 주는 방패가 아니다.
+///
+/// 후보를 반복자로 받으므로 부르는 쪽이 목록을 새로 담지 않는다. 이 함수는 몹
+/// 한 기마다 불리고, 몹은 한 틱에 수백 기가 지나간다.
+fn nearest_huntable<T: Copy>(
+    mx: f32,
+    my: f32,
+    candidates: impl IntoIterator<Item = (T, f32, f32)>,
+) -> Option<(T, f32)> {
+    let mut best: Option<(T, f32)> = None;
+    for (item, px, py) in candidates {
+        if in_safe_zone(px, py) {
+            continue;
+        }
+        let d2 = dist_sq(mx, my, px, py);
+        if best.is_none_or(|(_, closest)| d2 < closest) {
+            best = Some((item, d2));
+        }
+    }
+    best
+}
+
 fn moved_enough(nx: f32, ny: f32, monster: &Monster) -> bool {
     dist_sq(nx, ny, monster.grid_x, monster.grid_y) > 0.0001
 }
@@ -2626,15 +2653,76 @@ mod tests {
     // 어긋나면 서로 다른 격자를 가리켜 아무도 서로를 보지 못하는데, 오류가 나지
     // 않고 그냥 "빈 월드" 로 보이기 때문에 눈으로는 원인을 찾기 어렵다.
 
+    /// 안전지대 한복판의 좌표.
+    fn 안전지대_안() -> (f32, f32) {
+        world_center()
+    }
+
+    /// 안전지대 밖이면서 [`안전지대_안`] 에서 [`dx`] 만큼 떨어진 좌표.
+    fn 안전지대_밖(dx: f32) -> (f32, f32) {
+        let (cx, cy) = world_center();
+        let x = cx + SAFE_ZONE_TILES / 2.0 + dx;
+        assert!(!in_safe_zone(x, cy), "시험 좌표가 안전지대 밖이어야 한다");
+        (x, cy)
+    }
+
     #[test]
-    fn 플레이어_구독_청크는_사람_오십_명에서_역산한_크기다() {
-        // 동접 1,000 명이 걸을 수 있는 1,000 × 1,000 타일에 고르게 퍼졌을 때
-        //   9C² × (1,000 / 1,000,000) = 50  →  C ≈ 74.5
-        let density = 1_000.0 / (WORLD_PLAYABLE_TILES * WORLD_PLAYABLE_TILES);
-        let in_view = 9.0 * PLAYER_SUB_CHUNK_TILES * PLAYER_SUB_CHUNK_TILES * density;
-        assert!(
-            (in_view - 50.0).abs() < 1.0,
-            "3×3 에 들어오는 인원이 {in_view} 명이다. 50 명에서 역산한 값이어야 한다."
+    fn 안전지대에_선_사람은_사냥_후보가_아니다() {
+        let (sx, sy) = 안전지대_안();
+        let best = nearest_huntable(sx, sy, [(1u32, sx, sy)]);
+        assert_eq!(best, None, "안전지대 안의 사람만 있으면 쫓을 대상이 없다");
+    }
+
+    #[test]
+    fn 마을에_선_사람이_곁의_요원을_가리지_않는다() {
+        // 이것이 이 함수가 생긴 이유다. 몹 바로 옆(1 타일)에 사냥 중인 요원이
+        // 있고, 마을에는 그보다 **더 가까운**(0 타일) 사람이 서 있다.
+        //
+        // 예전 코드는 가장 가까운 사람부터 고르고 나서 안전지대를 확인했으므로
+        // 마을 사람이 뽑혔고, 그 한 사람 때문에 몹은 옆에 붙어 선 요원을 두고
+        // 그대로 잠들었다.
+        let (sx, sy) = 안전지대_안();
+        let (hx, hy) = 안전지대_밖(1.0);
+
+        // 몹은 마을 사람 위에 서 있다 — 마을 사람과의 거리가 0 이라 어떤
+        // 순서로 재도 그쪽이 먼저 뽑히는 자리다.
+        let best = nearest_huntable(sx, sy, [(1u32, sx, sy), (2u32, hx, hy)]);
+
+        let (who, _) = best.expect("사냥터에 선 요원을 골라야 한다");
+        assert_eq!(who, 2, "마을 사람을 건너뛰고 밖에 선 요원을 골라야 한다");
+    }
+
+    #[test]
+    fn 밖에_선_사람_중에서는_가장_가까운_쪽을_고른다() {
+        let (near_x, near_y) = 안전지대_밖(1.0);
+        let (far_x, far_y) = 안전지대_밖(20.0);
+        let best = nearest_huntable(near_x, near_y, [(9u32, far_x, far_y), (7u32, near_x, near_y)]);
+        assert_eq!(best.map(|(who, _)| who), Some(7));
+    }
+
+    #[test]
+    fn 플레이어_구독_청크는_클라이언트와_같은_격자다() {
+        // 🛑 이 수는 클라이언트 `kPlayerSubChunkTiles` 와 **글자 단위로** 같아야
+        // 한다. 어긋나면 두 쪽이 서로 다른 격자를 가리켜, 오류 하나 없이 그냥
+        // 아무도 서로를 보지 못한다.
+        //
+        // 예전 이 자리에는 "동접 1,000 명이 고르게 퍼졌을 때 3×3 에 50 명"
+        // 에서 역산한 74.5 를 기대하는 검사가 있었다. 그 근거는 [`PLAYER_SUB_CHUNK_TILES`]
+        // 문서가 적어 둔 대로 **폐기됐다** — 인원 상한은 이미 클라이언트가
+        // 거리순으로 만들고 있으므로(`ActionRpgGame._maxRemotePlayers`) 면적은
+        // 인원이 아니라 화면에 맞추는 것이 옳고, 그래서 값이 32 로 내려왔다.
+        // 검사만 옛 근거에 남아 그때부터 계속 빨간 채였다.
+        assert_eq!(
+            PLAYER_SUB_CHUNK_TILES, 32.0,
+            "클라이언트 kPlayerSubChunkTiles 와 같아야 한다"
+        );
+
+        // 3×3 을 구독할 때 **어디에 서 있든** 반드시 들어오는 반경은 청크 한
+        // 변과 같다(경계에 딱 붙어 선 최악의 경우). 그 보장 반경이 곧 이 값의
+        // 하한을 정하므로, 몹 격자와 같은 크기라는 사실도 함께 못 박아 둔다.
+        assert_eq!(
+            PLAYER_SUB_CHUNK_TILES, CHUNK_TILES,
+            "보장 반경 근거를 몹 격자와 공유한다"
         );
     }
 
