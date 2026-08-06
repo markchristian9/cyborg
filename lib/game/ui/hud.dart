@@ -450,6 +450,147 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
 
   // ── 우상단: 미니맵 ──────────────────────────────────────────────────
 
+  // 레이더가 돌려 쓰는 붓들.
+  //
+  // 레이더는 매 프레임 점 수백 개를 찍는다 — 몹 360 기, 사람 50 명, 전리품까지.
+  // 점 하나에 [Paint] 를 새로 지으면 그것만으로 초당 수만 개가 태어난다.
+  //
+  // 🛑 **색이 바뀌는 붓([_radarDot])은 쓰기 직전에 반드시 색을 지정할 것.**
+  // 앞선 loop 가 남긴 색이 그대로 묻어 온다.
+  final Paint _radarDot = Paint();
+  final Paint _radarAgentHalo = Paint()
+    ..color = GamePalette.remotePlayer.withValues(alpha: 0.3);
+  final Paint _radarSelfHalo = Paint()
+    ..color = GamePalette.playerAccent.withValues(alpha: 0.25);
+  final Paint _radarSelf = Paint()..color = GamePalette.playerAccent;
+  final Paint _radarZoneFill = Paint()
+    ..color = GamePalette.safeZoneFill.withValues(alpha: 0.3);
+  final Paint _radarZoneEdge = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.4
+    ..color = GamePalette.safeZoneEdge.withValues(alpha: 0.9);
+
+  // ── 레이더 지형 그림 ────────────────────────────────────────────────
+  //
+  // 지형은 **월드에 붙박여 있다.** 레이더가 플레이어를 따라 흐를 뿐, 어느 칸이
+  // 무슨 지형인지는 변하지 않는다. 그런데도 한때 매 프레임 2,200 칸을 새로
+  // 그렸다 — 실측하면 HUD 렌더 시간의 4 분의 3 이 여기였다(약 600 µs).
+  //
+  // 그래서 한 번 그려 [Picture] 로 굳혀 두고, 그 뒤로는 밀어서 쓴다. 플레이어가
+  // 움직여도 그림을 옮기기만 하면 되므로 프레임당 그리기 명령이 2,200 개에서
+  // 하나로 준다.
+
+  /// 굳혀 둔 지형 그림. 아직 한 번도 그리지 않았으면 null.
+  ui.Picture? _terrainPicture;
+
+  /// 지금 쥐고 있는 지형 그림. 다시 굳혔는지를 회귀 시험이 이것으로 가린다.
+  @visibleForTesting
+  ui.Picture? get terrainPicture => _terrainPicture;
+
+  /// 레이더 한 픽셀이 담는 거리(타일). 시험이 밀린 거리를 되짚는 데 쓴다.
+  @visibleForTesting
+  static double get radarScale => _minimapSize / (_radarRangeTiles * 2);
+
+  /// [_terrainPicture] 를 그릴 때 플레이어가 서 있던 자리.
+  ///
+  /// 지금 자리와의 차이가 곧 그림을 밀어야 할 거리다.
+  double _terrainRefX = 0;
+  double _terrainRefY = 0;
+
+  /// 그림에 여유로 더 담아 두는 반경(타일).
+  ///
+  /// 이만큼은 플레이어가 움직여도 그림을 다시 그리지 않는다. 가장자리가 비지
+  /// 않으려면 담아 둔 여유보다 적게 움직여야 하므로 두 값이 같다.
+  ///
+  /// 크게 잡을수록 다시 그리는 일이 드물어지지만 한 번에 그리는 칸이 늘어난다.
+  /// 12 타일이면 걸어서 3 초쯤(3.6 타일/초)이고, 그때 그리는 칸은 반경 82 타일
+  /// 어치라 매 프레임 그리던 시절의 한 판보다 4 할쯤 많을 뿐이다.
+  static const double _terrainMargin = 12;
+
+  /// 굳혀 둔 지형을 그린다. 필요하면 다시 굳힌다.
+  void _drawTerrain(
+    Canvas canvas,
+    LevelMap map,
+    Vector2 grid,
+    double scale,
+    Offset center,
+  ) {
+    final dx = grid.x - _terrainRefX;
+    final dy = grid.y - _terrainRefY;
+    if (_terrainPicture == null ||
+        dx.abs() > _terrainMargin ||
+        dy.abs() > _terrainMargin) {
+      _terrainPicture?.dispose();
+      _terrainPicture = _recordTerrain(map, grid, scale, center);
+      _terrainRefX = grid.x;
+      _terrainRefY = grid.y;
+    }
+
+    // 그림은 기준 자리에서 그려졌다. 그동안 움직인 만큼 거꾸로 민다.
+    canvas.save();
+    canvas.translate(
+      -(grid.x - _terrainRefX) * scale,
+      -(grid.y - _terrainRefY) * scale,
+    );
+    canvas.drawPicture(_terrainPicture!);
+    canvas.restore();
+  }
+
+  /// 기준 자리 [grid] 를 중심으로 지형을 한 번 그려 [Picture] 로 굳힌다.
+  ui.Picture _recordTerrain(
+    LevelMap map,
+    Vector2 grid,
+    double scale,
+    Offset center,
+  ) {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    // 여러 칸을 한 점으로 묶어 훑는다. 매 프레임 100만 칸을 볼 수는 없다.
+    const step = 3;
+    final cellSize = step * scale + 0.6;
+    const reach = _radarRangeTiles + _terrainMargin;
+    final minX = (grid.x - reach).floor();
+    final maxX = (grid.x + reach).ceil();
+    final minY = (grid.y - reach).floor();
+    final maxY = (grid.y + reach).ceil();
+
+    final plate = Paint()..color = const Color(0xFFDCEFF8);
+    final conduit = Paint()..color = const Color(0xFF9DE8F5);
+    final firewall = Paint()..color = const Color(0xFFFFAFC8);
+    final tower = Paint()..color = const Color(0xFF6E9DB8);
+
+    final originX = center.dx - grid.x * scale;
+    final originY = center.dy - grid.y * scale;
+
+    for (var y = minY; y <= maxY; y += step) {
+      final top = originY + y * scale;
+      for (var x = minX; x <= maxX; x += step) {
+        final tile = map.tileAt(x, y);
+        if (tile == TileType.none) continue;
+        canvas.drawRect(
+          Rect.fromLTWH(originX + x * scale, top, cellSize, cellSize),
+          map.isBlocked(x, y)
+              ? tower
+              : switch (tile) {
+                  TileType.circuit || TileType.stream => conduit,
+                  TileType.hazard => firewall,
+                  _ => plate,
+                },
+        );
+      }
+    }
+    return recorder.endRecording();
+  }
+
+  @override
+  void onRemove() {
+    // [Picture] 는 네이티브 자원을 쥔다. 놓지 않으면 화면을 오갈 때마다 샌다.
+    _terrainPicture?.dispose();
+    _terrainPicture = null;
+    super.onRemove();
+  }
+
   /// 플레이어를 중심으로 한 근접 레이더.
   ///
   /// 월드가 1 km²라 전체를 132픽셀에 담으면 아무것도 분간할 수 없다.
@@ -465,11 +606,17 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
     final scale = _minimapSize / (_radarRangeTiles * 2);
 
     /// 그리드 좌표를 레이더 안의 위치로 옮긴다.
-    Offset toRadar(Vector2 grid) => center +
-        Offset(
-          (grid.x - player.grid.x) * scale,
-          (grid.y - player.grid.y) * scale,
-        );
+    ///
+    /// 🛑 **[Vector2] 를 받는 판을 새로 만들지 말 것.** 부르는 쪽이 좌표를 담을
+    /// [Vector2] 를 하나 더 짓게 되는데, 이 함수는 한 프레임에 수천 번 불린다.
+    /// 이미 [Vector2] 를 손에 쥐고 있으면 `.x` · `.y` 를 그대로 넘기면 된다.
+    ///
+    /// 레이더 원점을 미리 접어 두어 `center + Offset(...)` 두 번 대신 [Offset]
+    /// 하나만 짓는다.
+    final radarOriginX = center.dx - player.grid.x * scale;
+    final radarOriginY = center.dy - player.grid.y * scale;
+    Offset toRadar(double gridX, double gridY) =>
+        Offset(radarOriginX + gridX * scale, radarOriginY + gridY * scale);
 
     final frame = RRect.fromRectAndRadius(
       Rect.fromLTWH(
@@ -498,71 +645,40 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
     );
     canvas.translate(origin.dx, origin.dy);
 
-    // 지형은 여러 칸을 한 점으로 묶어 훑는다. 매 프레임 100만 칸을 볼 수는 없다.
-    const step = 3;
-    final cellSize = step * scale + 0.6;
-    final minX = (player.grid.x - _radarRangeTiles).floor();
-    final maxX = (player.grid.x + _radarRangeTiles).ceil();
-    final minY = (player.grid.y - _radarRangeTiles).floor();
-    final maxY = (player.grid.y + _radarRangeTiles).ceil();
-
-    final plate = Paint()..color = const Color(0xFFDCEFF8);
-    final conduit = Paint()..color = const Color(0xFF9DE8F5);
-    final firewall = Paint()..color = const Color(0xFFFFAFC8);
-    final tower = Paint()..color = const Color(0xFF6E9DB8);
-
-    for (var y = minY; y <= maxY; y += step) {
-      for (var x = minX; x <= maxX; x += step) {
-        final tile = map.tileAt(x, y);
-        if (tile == TileType.none) continue;
-        final point = toRadar(Vector2(x.toDouble(), y.toDouble()));
-        canvas.drawRect(
-          Rect.fromLTWH(point.dx, point.dy, cellSize, cellSize),
-          map.isBlocked(x, y)
-              ? tower
-              : switch (tile) {
-                  TileType.circuit || TileType.stream => conduit,
-                  TileType.hazard => firewall,
-                  _ => plate,
-                },
-        );
-      }
-    }
+    _drawTerrain(canvas, map, player.grid, scale, center);
 
     // 안전지대
     final zone = map.safeZone;
-    final zoneTopLeft = toRadar(Vector2(zone.minX, zone.minY));
-    final zoneBottomRight = toRadar(Vector2(zone.maxX, zone.maxY));
-    final zoneRect = Rect.fromPoints(zoneTopLeft, zoneBottomRight);
-    canvas.drawRect(
-      zoneRect,
-      Paint()..color = GamePalette.safeZoneFill.withValues(alpha: 0.3),
+    final zoneRect = Rect.fromPoints(
+      toRadar(zone.minX, zone.minY),
+      toRadar(zone.maxX, zone.maxY),
     );
-    canvas.drawRect(
-      zoneRect,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4
-        ..color = GamePalette.safeZoneEdge.withValues(alpha: 0.9),
-    );
+    canvas.drawRect(zoneRect, _radarZoneFill);
+    canvas.drawRect(zoneRect, _radarZoneEdge);
 
     // 전리품. 무엇이 떨어졌는지 색으로 구분하고 희귀품은 크게 찍는다.
+    //
+    // 붓은 아래 loop 마다 하나씩 돌려 쓴다. 점 하나에 [Paint] 를 새로 지으면
+    // 몹 360 기 · 사람 50 명이 그대로 초당 수만 개가 된다. `canvas.drawX` 는
+    // 넘겨받은 붓을 그 자리에서 디스플레이 리스트로 옮겨 적으므로, 다음 점을
+    // 그리기 전에 색만 바꿔 주면 된다.
     for (final pickup in game.pickups) {
+      _radarDot.color = pickup.spec.color.withValues(alpha: 0.85);
       canvas.drawCircle(
-        toRadar(pickup.grid),
+        toRadar(pickup.grid.x, pickup.grid.y),
         pickup.spec.rarity == LootRarity.rare ? 2.6 : 1.8,
-        Paint()..color = pickup.spec.color.withValues(alpha: 0.85),
+        _radarDot,
       );
     }
 
     // 적. 지휘 유닛은 크게 찍어 멀리서도 알아보게 한다.
+    _radarDot.color = GamePalette.robotEye;
     for (final enemy in game.enemies) {
       if (!enemy.isAlive) continue;
-      final isBoss = enemy.isBoss;
       canvas.drawCircle(
-        toRadar(enemy.grid),
-        isBoss ? 4 : 2.2,
-        Paint()..color = GamePalette.robotEye,
+        toRadar(enemy.grid.x, enemy.grid.y),
+        enemy.isBoss ? 4 : 2.2,
+        _radarDot,
       );
     }
 
@@ -572,34 +688,18 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
     // 몹은 지나치면 그만이지만 사람은 함께 사냥할 수도, PK 로 붙을 수도 있어
     // 판단이 필요하다.
     for (final other in game.presence.others) {
-      final at = toRadar(other.grid);
-      canvas.drawCircle(
-        at,
-        4.5,
-        Paint()..color = GamePalette.remotePlayer.withValues(alpha: 0.3),
-      );
-      canvas.drawCircle(
-        at,
-        2.6,
-        Paint()
-          ..color = other.alive
-              ? GamePalette.remotePlayer
-              : GamePalette.remotePlayer.withValues(alpha: 0.45),
-      );
+      final at = toRadar(other.grid.x, other.grid.y);
+      canvas.drawCircle(at, 4.5, _radarAgentHalo);
+      _radarDot.color = other.alive
+          ? GamePalette.remotePlayer
+          : GamePalette.remotePlayer.withValues(alpha: 0.45);
+      canvas.drawCircle(at, 2.6, _radarDot);
     }
 
     // 플레이어(맥동하는 링)
     final pulse = 3 + math.sin(_time * 4) * 1.5;
-    canvas.drawCircle(
-      center,
-      pulse + 3,
-      Paint()..color = GamePalette.playerAccent.withValues(alpha: 0.25),
-    );
-    canvas.drawCircle(
-      center,
-      2.8,
-      Paint()..color = GamePalette.playerAccent,
-    );
+    canvas.drawCircle(center, pulse + 3, _radarSelfHalo);
+    canvas.drawCircle(center, 2.8, _radarSelf);
 
     canvas.restore();
 
